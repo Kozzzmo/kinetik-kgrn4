@@ -5,8 +5,7 @@ into slices and played as grains by a step sequencer with per-step locks (owner'
 d'échantillons découpés en grains et séquencés", reuse KDSP-16 sample loading and the J-Slice slicing, workflow in the
 spirit of a well-known granular groovebox — **no other maker's names or trade dress anywhere**). All DSP is original
 code. Family: KDSP-16, KMSP-6, KFX-8, KBAS-1, KJNG-2, KDYN-10.
-**Repository not created on GitHub yet** (owner: "construis en local d'abord"); built in `/home/claude/kinetik-kgrn4`
-with `dpf` symlinked to the KDSP-16 checkout. The update URL already points to `Kozzzmo/kinetik-kgrn4`.
+Repository: `Kozzzmo/kinetik-kgrn4` (public, created 2026-10-27; first built locally in `/home/claude/kinetik-kgrn4`, with `dpf` symlinked to the KDSP-16 checkout).
 
 ## Source map (`src/`)
 
@@ -40,4 +39,4 @@ with `dpf` symlinked to the KDSP-16 checkout. The update URL already points to `
 - Tests: `tests/engine.cpp` (materials, trigs, pitch vs scan, freeze, backwards, slices, locks, mute, decay, live notes,
   extreme values, pattern change, slicer), `tests/bank.cpp` (format, commands, every preset plays at a sane level),
   `tests/license.cpp`, `tests/update.cpp`. VST3 validator 47/47. Worst case CPU (4 tracks, max density / size): ~4 % of a core.
-- CI workflow adapted (auval `aumu KGR4 Kntk`); it runs once the repository exists with the family's secrets.
+- CI workflow adapted (auval `aumu KGR4 Kntk`); every push to `main` builds and publishes the release `v$(cat VERSION)`.
