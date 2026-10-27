@@ -1,0 +1,83 @@
+// Kinetik KGRN-4 — send effects: tempo-synced ping-pong echo and an 8-line feedback-delay-network reverb
+#pragma once
+#include "Params.hpp"
+#include <vector>
+#include <algorithm>
+
+namespace kn {
+
+struct PingPong {
+    std::vector<float> l, r; int w = 0; double time = 1000; float fb = 0.5f; OnePole lpL, lpR; float sr = 48000.f; int quiet = 0;
+    void init(float sampleRate) { sr = sampleRate; l.assign((size_t)(sr * 4.5f), 0.f); r.assign(l.size(), 0.f); lpL.setLP(5000.f, sr); lpR.setLP(5000.f, sr); clear(); }
+    void clear() { std::fill(l.begin(), l.end(), 0.f); std::fill(r.begin(), r.end(), 0.f); w = 0; quiet = 1 << 30; }
+    void set(float timeKnob, float fbKnob, double spb) { time = std::min((double)l.size() - 4.0, std::max(16.0, kDelTime[bin8(timeKnob)] * spb)); fb = fbKnob / 127.f * 0.92f; }
+    bool asleep() const { return quiet > (int)l.size(); }
+    inline void process(float inL, float inR, float& outL, float& outR)
+    {
+        if (inL != 0.f || inR != 0.f) quiet = 0;
+        if (asleep()) { outL = outR = 0.f; return; }
+        double pos = (double)w - time; if (pos < 0) pos += l.size();
+        const size_t i0 = (size_t)pos % l.size(), i1 = (i0 + 1) % l.size(); const float fr = (float)(pos - std::floor(pos));
+        const float el = l[i0] + (l[i1] - l[i0]) * fr, er = r[i0] + (r[i1] - r[i0]) * fr;
+        l[(size_t)w] = (inL + inR) * 0.5f + lpR.lp(er) * fb;        // mono in on the left, cross feedback = ping-pong
+        r[(size_t)w] = lpL.lp(el) * fb;
+        if (++w >= (int)l.size()) w = 0;
+        outL = el; outR = er;
+        if (std::fabs(el) + std::fabs(er) < 1e-6f) ++quiet; else quiet = 0;
+    }
+};
+
+struct Reverb {
+    static constexpr int kLines = 8;
+    std::vector<float> buf[kLines]; int len[kLines] = {}, pos[kLines] = {};
+    float g[kLines] = {}, z[kLines] = {}, damp = 0.3f, sr = 48000.f;
+    std::vector<float> pre; int pw = 0, preLen = 1;
+    int quiet = 1 << 30;
+    void init(float sampleRate)
+    {
+        sr = sampleRate;
+        static const float ms[kLines] = {29.7f, 37.1f, 41.1f, 43.7f, 53.3f, 59.9f, 67.7f, 73.1f};
+        for (int i = 0; i < kLines; ++i) { len[i] = std::max(8, (int)(ms[i] * 0.001f * sr * 1.6f)); buf[i].assign((size_t)len[i], 0.f); }
+        pre.assign((size_t)(0.02f * sr) + 2, 0.f); preLen = (int)pre.size() - 1;
+        clear(); set(80.f, 70.f);
+    }
+    void clear() { for (int i = 0; i < kLines; ++i) { std::fill(buf[i].begin(), buf[i].end(), 0.f); pos[i] = 0; z[i] = 0.f; } std::fill(pre.begin(), pre.end(), 0.f); pw = 0; quiet = 1 << 30; }
+    // size knob: decay 0.4 .. 14 s; tone: damping cutoff 1.5 .. 14 kHz
+    void set(float sizeKnob, float toneKnob)
+    {
+        const float rt = 0.4f * std::pow(35.f, sizeKnob / 127.f);
+        for (int i = 0; i < kLines; ++i) g[i] = std::pow(10.f, -3.f * len[i] / (rt * sr));
+        const float fc = 1500.f * std::pow(9.3f, toneKnob / 127.f);
+        damp = std::exp(-kTwoPi * std::min(fc, sr * 0.45f) / sr);
+    }
+    bool asleep() const { return quiet > (int)(sr * 15.f); }
+    inline void process(float inL, float inR, float& outL, float& outR)
+    {
+        if (inL != 0.f || inR != 0.f) quiet = 0;
+        if (asleep()) { outL = outR = 0.f; return; }
+        // pre-delay (mono)
+        pre[(size_t)pw] = (inL + inR) * 0.5f; const float x = pre[(size_t)((pw + 1) % (preLen + 1))]; pw = (pw + 1) % (preLen + 1);
+        const float side = (inL - inR) * 0.5f;
+        float o[kLines];
+        for (int i = 0; i < kLines; ++i) o[i] = buf[i][(size_t)pos[i]];
+        // Hadamard 8x8 (fast, normalised)
+        float a[kLines];
+        for (int i = 0; i < kLines; ++i) a[i] = o[i];
+        for (int h = 1; h < kLines; h <<= 1)
+            for (int i = 0; i < kLines; i += h * 2)
+                for (int j = i; j < i + h; ++j) { const float u = a[j], v = a[j + h]; a[j] = u + v; a[j + h] = u - v; }
+        const float nrm = 0.35355339f;
+        for (int i = 0; i < kLines; ++i) {
+            float y = a[i] * nrm * g[i];
+            z[i] = y + (z[i] - y) * damp; y = z[i];
+            const float in = (i & 1) ? x - side : x + side;
+            buf[i][(size_t)pos[i]] = y + in * 0.35f;
+            if (++pos[i] >= len[i]) pos[i] = 0;
+        }
+        outL = (o[0] + o[2] + o[4] + o[6]) * 0.5f;
+        outR = (o[1] + o[3] + o[5] + o[7]) * 0.5f;
+        if (std::fabs(outL) + std::fabs(outR) < 1e-6f) ++quiet; else quiet = 0;
+    }
+};
+
+} // namespace kn
