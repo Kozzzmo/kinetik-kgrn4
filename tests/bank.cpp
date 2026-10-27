@@ -37,6 +37,8 @@ int main()
     applyCommand(a, "cl 2"); check(a.patterns[2].isDefault(), "cl");
     check(applyCommand(a, "k 0 4 0 0 1") == -1 && applyCommand(a, "s 0 0 64 1") == -1 && applyCommand(a, "zz") == -1, "bad commands refused");
     check(!deserializeBank(b, "KFX81\n"), "other formats refused");
+    applyCommand(a, "C 1 2 4:3 1:1");
+    check(deserializeBank(b, serializeBank(a).c_str()) && b.chain.on && b.chain.n == 2 && b.chain.pat[0] == 4 && b.chain.rep[0] == 3, "chain survives");
     double ra, rb; Kit k; k.nSlices = 2; k.slice[0] = 0; k.slice[1] = 500000;
     sliceRegion(k, 1, 1000, ra, rb); check(ra == 500 && rb == 1000, "slice region");
     sliceRegion(k, -1, 1000, ra, rb); check(ra == 0 && rb == 1000, "whole sample region");

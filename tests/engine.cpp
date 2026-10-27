@@ -165,6 +165,13 @@ int main()
         render(*e, 6000 * 7);
         check(e->outPattern == 1, "then it starts");
     }
+    {   // CHAIN: A02 then A03 x2, looped
+        auto e = make(s440.get());
+        e->bank.chain.parse("1 2 1:1 2:2", kPatterns);
+        std::vector<int> seq; std::vector<float> L(256), R(256);
+        for (int p = 0; p < 96000 * 7; p += 256) { e->process(L.data(), R.data(), 256, Transport()); if (seq.empty() || seq.back() != e->outPattern) seq.push_back(e->outPattern); }
+        check(seq.size() >= 4 && seq[0] == 1 && seq[1] == 2 && seq[2] == 1 && seq[3] == 2, "CHAIN plays its patterns in order and loops");
+    }
     {   // slicer
         SamplePtr b = material(6);
         const auto s = slicer::transients(b->pcm, b->sr, 0.5f, kMaxSlices);

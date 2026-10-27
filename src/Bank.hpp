@@ -2,6 +2,7 @@
 // text serialization and edit commands
 #pragma once
 #include "Params.hpp"
+#include "Chain.hpp"
 #include <cstring>
 #include <cstdlib>
 #include <string>
@@ -60,7 +61,8 @@ struct Kit {
 struct Bank {
     Pattern patterns[kPatterns];
     Kit kit[kTracks];
-    void initDefault() { for (auto& p : patterns) p.clear(); for (auto& k : kit) k = Kit(); }
+    Chain chain;
+    void initDefault() { for (auto& p : patterns) p.clear(); for (auto& k : kit) k = Kit(); chain = Chain(); }
 };
 
 static constexpr int kKitTouched = 1000;   // applyCommand: a kit changed
@@ -78,6 +80,7 @@ inline std::string serializeBank(const Bank& b)
             s += "\n";
         }
     }
+    if (!b.chain.isDefault()) s += b.chain.line() + "\n";
     for (int p = 0; p < kPatterns; ++p) {
         const Pattern& P = b.patterns[p];
         if (P.isDefault()) continue;
@@ -155,6 +158,7 @@ inline int applyCommand(Bank& b, const char* line)
         k.nSlices = (uint8_t)got;
         return kKitTouched;
     }
+    if (!std::strcmp(op, "C")) return b.chain.parse(a, kPatterns) ? kKitTouched : -1;
     if (!std::strcmp(op, "cl") && std::sscanf(a, "%d", &v[0]) == 1 && okP(v[0])) { b.patterns[v[0]].clear(); return v[0]; }
     if (!std::strcmp(op, "clt") && std::sscanf(a, "%d %d", &v[0], &v[1]) == 2 && okP(v[0]) && okT(v[1])) { b.patterns[v[0]].clearTrack(v[1]); return v[0]; }
     if (!std::strcmp(op, "cp") && std::sscanf(a, "%d %d", &v[0], &v[1]) == 2 && okP(v[0]) && okP(v[1])) { b.patterns[v[1]] = b.patterns[v[0]]; return v[1]; }

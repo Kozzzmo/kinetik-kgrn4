@@ -37,7 +37,7 @@ struct R {
 };
 
 enum DragKind { dkNone, dkKnob, dkGlobal, dkTempo, dkPatLen, dkSwing, dkTrackLen, dkPaint, dkWave, dkTrig, dkResize };
-enum Overlay { ovNone, ovPresets, ovSkins, ovSave, ovLicense, ovUpdate };
+enum Overlay { ovNone, ovPresets, ovSkins, ovSave, ovLicense, ovUpdate, ovChain };
 
 class KgrnUI : public UI
 {
@@ -364,9 +364,10 @@ protected:
     R stepCell(int t, int i) const { return {128.f + i * 46.f, rowY(t), 42.f, 38.f}; }
     // right column
     R patBtn(int i) const { return {898.f + (i % 4) * 66.f, 84.f + (i / 4) * 32.f, 60.f, 28.f}; }
-    R patCopy() const { return {898.f, 214.f, 82.f, 26.f}; }
-    R patPaste() const { return {986.f, 214.f, 82.f, 26.f}; }
-    R patClear() const { return {1074.f, 214.f, 82.f, 26.f}; }
+    R patCopy() const { return {898.f, 214.f, 60.f, 26.f}; }
+    R patPaste() const { return {964.f, 214.f, 60.f, 26.f}; }
+    R patClear() const { return {1030.f, 214.f, 60.f, 26.f}; }
+    R chainBtn() const { return {1096.f, 214.f, 60.f, 26.f}; }
     R gKnob(int i) const { return i < 3 ? R{892.f + i * 90.f, 276.f, 90.f, 120.f} : R{937.f + (i - 3) * 90.f, 392.f, 90.f, 120.f}; }
     R presetName() const { return {898.f, 526.f, 258.f, 40.f}; }
     R presetBtn() const { return {898.f, 574.f, 258.f, 34.f}; }
@@ -418,6 +419,7 @@ protected:
         if (overlay == ovSave) drawSave();
         if (overlay == ovLicense) drawLicense();
         if (overlay == ovUpdate) drawUpdate();
+        if (overlay == ovChain) drawChain();
         if (tipShown && overlay == ovNone) drawTip();
         drawGrip();
     }
@@ -693,7 +695,8 @@ protected:
             number(r.cx(), r.cy() + 1, b, 13.f, i == ep ? th->selText : (any ? th->text : th->faint));
             if (running && i == pp && pp != ep) frame(r, th->accent, -1.f, 2.f);
         }
-        button(patCopy(), "COPY", false, 9.5f); button(patPaste(), "PASTE", false, 9.5f); button(patClear(), "CLEAR", false, 9.5f);
+        button(patCopy(), "COPY", false, 9.f); button(patPaste(), "PASTE", false, 9.f); button(patClear(), "CLEAR", false, 9.f);
+        button(chainBtn(), "CHAIN", bank->chain.active(), 9.f);
         panelBox({888.f, 256.f, 278.f, 262.f});
         label(900, 270, "ECHO / REVERB / OUT", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
         for (int i = 0; i < 5; ++i) {
@@ -1168,6 +1171,70 @@ protected:
         setKnob(tpPOSITION, std::round(clampf((float)pos, 0.f, 1.f) * 127.f));
     }
 
+    // a page past the end of the selected track makes the track (and the pattern) that long
+    void showPage(int i)
+    {
+        const int need = (i + 1) * 16;
+        if (pat().len[selTrack] < need) {
+            std::string c = "L " + std::to_string(editPattern()) + " " + std::to_string(selTrack) + " " + std::to_string(need) + " " + std::to_string(pat().speed[selTrack]);
+            if (pat().length < need) c += "\nP " + std::to_string(editPattern()) + " " + std::to_string(need) + " " + std::to_string(pat().swing);
+            sendLines(c);
+        }
+        stepPg = i; repaint();
+    }
+    int chainPlayingPattern() const { return gp(gOUT_STEP) >= 0.f ? (int)std::lround(gp(gOUT_PATTERN)) : -1; }
+    // ------------------------------------------------------------------ pattern CHAIN window (same in every Kinetik plug-in)
+    R chainBox() const { return {240.f, 110.f, 700.f, 470.f}; }
+    R chainOnBtn() const { return {700.f, 132.f, 216.f, 36.f}; }
+    R chainAddBtn(int i) const { return {264.f + (i % 8) * 82.f, 214.f + (i / 8) * 40.f, 76.f, 34.f}; }
+    R chainChip(int i) const { return {264.f + (i % 8) * 82.f, 340.f + (i / 8) * 52.f, 76.f, 46.f}; }
+    R chainClearBtn() const { return {264.f, 524.f, 140.f, 36.f}; }
+    R chainCloseBtn() const { return {796.f, 524.f, 120.f, 36.f}; }
+    void sendChain(const Chain& c) { sendCmd(c.line()); repaint(); }
+    void drawChain()
+    {
+        const R bx = chainBox();
+        overlayBox(bx);
+        const Chain& c = bank->chain;
+        number(264, bx.y + 40, "Pattern chain", 22.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
+        button(chainOnBtn(), c.on ? "CHAIN ON" : "CHAIN OFF", c.on != 0, 11.f);
+        label(264, 198, "ADD A PATTERN AT THE END", 9.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        char b[24];
+        for (int i = 0; i < kPatterns; ++i) {
+            std::snprintf(b, sizeof(b), "A%02d", i + 1);
+            const R r = chainAddBtn(i);
+            box(r, th->btnFill); frame(r, th->btnEdge);
+            number(r.cx(), r.cy() + 1, b, 13.f, th->text);
+        }
+        label(264, 322, "THE CHAIN (CLICK = MORE REPEATS, RIGHT-CLICK = REMOVE)", 9.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        if (c.n == 0) label(264, 362, "empty: add patterns above, then switch CHAIN ON", 10.f, th->faint, ALIGN_LEFT | ALIGN_MIDDLE);
+        const int playing = chainPlayingPattern();
+        for (int i = 0; i < c.n; ++i) {
+            const R r = chainChip(i);
+            const bool now = c.on && playing == c.pat[i];
+            if (now) box(r, th->selFill); else { box(r, th->btnFill); frame(r, th->btnEdge); }
+            std::snprintf(b, sizeof(b), "A%02d", c.pat[i] + 1);
+            number(r.cx(), r.y + 17, b, 13.f, now ? th->selText : th->text);
+            std::snprintf(b, sizeof(b), "x%d", c.rep[i]);
+            label(r.cx(), r.y + 35, b, 9.5f, now ? th->selText : th->dim);
+        }
+        button(chainClearBtn(), "CLEAR", false, 10.5f);
+        button(chainCloseBtn(), "CLOSE", true, 11.f);
+    }
+    bool chainClick(float x, float y, bool right)
+    {
+        Chain c = bank->chain;
+        if (chainOnBtn().in(x, y)) { c.on = c.on ? 0 : (c.n > 0 ? 1 : 0); sendChain(c); return true; }
+        for (int i = 0; i < kPatterns; ++i) if (chainAddBtn(i).in(x, y)) { if (c.n < Chain::kMax) { c.add(i, 1); sendChain(c); } return true; }
+        for (int i = 0; i < c.n; ++i) if (chainChip(i).in(x, y)) {
+            if (right) c.remove(i); else c.rep[i] = (uint8_t)(c.rep[i] >= 16 ? 1 : c.rep[i] + 1);
+            sendChain(c); return true;
+        }
+        if (chainClearBtn().in(x, y)) { c.clear(); sendChain(c); return true; }
+        if (chainCloseBtn().in(x, y) || !chainBox().in(x, y)) { overlay = ovNone; repaint(); }
+        return true;
+    }
+
     // ------------------------------------------------------------------ tooltips
     std::string tipAt(float x, float y)
     {
@@ -1184,7 +1251,8 @@ protected:
         if (matBtn().in(x, y)) return "Built-in materials to play without your own samples. Click = next, right-click = previous (SAMPLE = your file).";
         if (sliceModeBtn().in(x, y)) return "How the sample is cut: at its transients (hits) or into equal slices.";
         if (amtBox().in(x, y) || amtMinus().in(x, y) || amtPlus().in(x, y)) return "TRANSIENTS: sensitivity (more = more slices). EQUAL: number of slices.";
-        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) return "Show steps 1-16, 17-32, 33-48 or 49-64 (tracks can be up to 64 steps).";
+        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) return "Show steps 1-16, 17-32, 33-48 or 49-64. A page past the end makes the selected track (and the pattern) that long.";
+        if (chainBtn().in(x, y)) return "CHAIN: play a list of patterns in a loop, each a number of times.";
         if (lenBox().in(x, y) || lenMinus().in(x, y) || lenPlus().in(x, y)) return "Length of the selected track (1-64 steps): tracks of different lengths drift against each other.";
         if (speedBtn().in(x, y)) return "Speed of the selected track's steps (1x = 16ths). Click = next, right-click = previous.";
         if (rotL().in(x, y) || rotR().in(x, y)) return "Shift the selected track's steps (and their locks) one step left or right.";
@@ -1277,6 +1345,7 @@ protected:
         if (overlay == ovPresets) { presetsClick(x, y); return true; }
         if (overlay == ovLicense) return licenseClick(x, y);
         if (overlay == ovUpdate) return updateClick(x, y);
+        if (overlay == ovChain) return chainClick(x, y, right);
         if (overlay == ovSave) { if (saveOk().in(x, y)) commitSave(); else if (saveCancel().in(x, y) || !saveBox().in(x, y)) { overlay = ovNone; repaint(); } return true; }
         if (overlay == ovSkins) {
             static const int zooms[6] = {80, 100, 120, 140, 160, 200};
@@ -1338,7 +1407,8 @@ protected:
             repaint(); return true;
         }
         // sequencer toolbar
-        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) { stepPg = i; repaint(); return true; }
+        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) { showPage(i); return true; }
+        if (chainBtn().in(x, y)) { overlay = ovChain; repaint(); return true; }
         if (lenMinus().in(x, y)) { setTrackLen(pat().len[selTrack] - 1); return true; }
         if (lenPlus().in(x, y)) { setTrackLen(pat().len[selTrack] + 1); return true; }
         if (lenBox().in(x, y)) { drag = dkTrackLen; dragY = y; dragStart = pat().len[selTrack]; return true; }
@@ -1444,6 +1514,10 @@ protected:
         if (updater && (int)updater->getState() != updLastState) { updLastState = (int)updater->getState(); repaint(); }
         if (!patMsg.empty() && nowSec() > patMsgUntil) { patMsg.clear(); repaint(); }
         if (!smpMsg.empty() && nowSec() > smpMsgUntil) { smpMsg.clear(); repaint(); }
+        if (bank->chain.active() && drag == dkNone) {          // in a chain, the view follows the music
+            const int pp = chainPlayingPattern();
+            if (pp >= 0 && pp != editPattern()) { setParamGesture(kGlobalBase + gPATTERN, (float)pp); lockStep = -1; repaint(); }
+        }
         if (viewDirty && drag != dkResize && ++viewDirtyTicks > 30) saveView();
     }
 

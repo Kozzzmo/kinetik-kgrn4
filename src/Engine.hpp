@@ -89,7 +89,11 @@ public:
         const double bpf = bpm / (60.0 * sr);
         const double b1 = b0 + bpf * frames;
         const int want = clampi(midiPattern >= 0 ? midiPattern : (int)global[gPATTERN], 0, kPatterns - 1);
-        if (!playing || restarted) curPattern = want;
+        if (!playing || restarted) {
+            const int c = playing ? chainPl.start(bank.chain) : -1;
+            if (!playing) chainPl.reset();
+            curPattern = c >= 0 ? c : want;
+        }
         const double spb = 60.0 * sr / bpm;
         dly.set(global[gDLY_TIME], global[gDLY_FB], spb);
         rev.set(global[gREV_SIZE], global[gREV_TONE]);
@@ -108,10 +112,10 @@ public:
             }
             const double beat = b0 + pos * bpf;
             if (playing) {
-                if (want != curPattern) {
+                {
                     const Pattern& P = bank.patterns[curPattern];
                     const int64_t k16 = (int64_t)std::floor(beat / 0.25 + 1e-9), len = std::max<int>(1, P.length);
-                    if (lastK16 != INT64_MIN && k16 / len != lastK16 / len) curPattern = want;
+                    if (lastK16 != INT64_MIN && k16 / len != lastK16 / len) { const int c = chainPl.next(bank.chain); curPattern = c >= 0 ? c : want; }
                 }
                 lastK16 = (int64_t)std::floor(beat / 0.25 + 1e-9);
                 const Pattern& P = bank.patterns[curPattern];
@@ -195,6 +199,7 @@ private:
     PingPong dly; Reverb rev;
     int64_t lastK16 = INT64_MIN;
     int curPattern = 0;
+    ChainPlayer chainPl;
     bool wasPlaying = false, usingInternal = false, prevPlayParam = false;
     double internalBeat = 0, prevB1 = 0;
     float outG = -1.f;

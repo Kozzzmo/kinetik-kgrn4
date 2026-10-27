@@ -40,3 +40,9 @@ Repository: `Kozzzmo/kinetik-kgrn4` (public, created 2026-10-27; first built loc
   extreme values, pattern change, slicer), `tests/bank.cpp` (format, commands, every preset plays at a sane level),
   `tests/license.cpp`, `tests/update.cpp`. VST3 validator 47/47. Worst case CPU (4 tracks, max density / size): ~4 % of a core.
 - CI workflow adapted (auval `aumu KGR4 Kntk`); every push to `main` builds and publishes the release `v$(cat VERSION)`.
+
+## Added in 0.2.0
+
+- Pattern CHAIN (`Chain.hpp`, shared by the five Kinetik sequencers): `Bank::chain` (line `C`), `Engine::chainPl` (start at a
+  restart, `next()` at the end of the master length), CHAIN button + `ovChain` window, the view follows the chain.
+- `showPage(i)`: a step page past the end of the selected track makes the track (and the pattern) that long.
