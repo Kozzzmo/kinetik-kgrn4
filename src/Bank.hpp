@@ -50,11 +50,13 @@ struct Pattern {
 
 // the sound source of each track (shared by all patterns)
 struct Kit {
-    uint8_t material = 0;                 // 0 = the track's own sample, 1.. = built-in material (Materials.hpp)
+    uint8_t material = 0;                 // 0 = the track's own sample, 1.. = built-in material (Materials.hpp), kMatLive = the input
     uint8_t mute = 0;
     uint8_t sliceMode = 0;                // 0 = transients, 1 = equal slices
     uint8_t sliceAmount = 50;             // transients: sensitivity 0..100; equal: number of slices 1..32
     uint8_t nSlices = 0;
+    uint8_t mode = gmClassic;             // GrainMode
+    uint8_t sync = 0;                     // SIZE in note values
     uint32_t slice[kMaxSlices] = {};      // slice starts, millionths of the sample length (ascending, slice[0] usually 0)
 };
 
@@ -69,11 +71,11 @@ static constexpr int kKitTouched = 1000;   // applyCommand: a kit changed
 
 inline std::string serializeBank(const Bank& b)
 {
-    std::string s = "KGRN41\n";
+    std::string s = "KGRN42\n";
     char buf[200];
     for (int t = 0; t < kTracks; ++t) {
         const Kit& k = b.kit[t];
-        std::snprintf(buf, sizeof(buf), "M %d %d %d %d %d\n", t, k.material, k.mute, k.sliceMode, k.sliceAmount); s += buf;
+        std::snprintf(buf, sizeof(buf), "M %d %d %d %d %d %d %d\n", t, k.material, k.mute, k.sliceMode, k.sliceAmount, k.mode, k.sync); s += buf;
         if (k.nSlices) {
             std::snprintf(buf, sizeof(buf), "X %d %d", t, k.nSlices); s += buf;
             for (int i = 0; i < k.nSlices; ++i) { std::snprintf(buf, sizeof(buf), " %u", k.slice[i]); s += buf; }
@@ -110,7 +112,7 @@ inline int applyCommand(Bank& b, const char* line)
     char op[8] = {0};
     if (std::sscanf(line, "%7s", op) != 1) return -1;
     const char* a = line + std::strlen(op);
-    int v[6] = {0};
+    int v[8] = {0};
     auto okP = [](int p) { return p >= 0 && p < kPatterns; };
     auto okT = [](int t) { return t >= 0 && t < kTracks; };
     auto okS = [](int s) { return s >= 0 && s < kSteps; };
@@ -136,9 +138,10 @@ inline int applyCommand(Bank& b, const char* line)
     if (!std::strcmp(op, "kc") && std::sscanf(a, "%d %d %d", &v[0], &v[1], &v[2]) == 3 && okP(v[0]) && okT(v[1]) && okS(v[2])) {
         std::memset(b.patterns[v[0]].locks[v[1]][v[2]], kNoLock, kTrackParams); return v[0];
     }
-    if (!std::strcmp(op, "M") && std::sscanf(a, "%d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4]) == 5 && okT(v[0])) {
+    if (!std::strcmp(op, "M") && std::sscanf(a, "%d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]) >= 5 && okT(v[0])) {
         Kit& k = b.kit[v[0]];
         k.material = (uint8_t)clampi(v[1], 0, 64); k.mute = v[2] ? 1 : 0; k.sliceMode = v[3] ? 1 : 0; k.sliceAmount = (uint8_t)clampi(v[4], 0, 100);
+        k.mode = (uint8_t)clampi(v[5], 0, kGrainModes - 1); k.sync = v[6] ? 1 : 0;
         return kKitTouched;
     }
     if (!std::strcmp(op, "U") && std::sscanf(a, "%d %d", &v[0], &v[1]) == 2 && okT(v[0])) { b.kit[v[0]].mute = v[1] ? 1 : 0; return kKitTouched; }
@@ -166,15 +169,26 @@ inline int applyCommand(Bank& b, const char* line)
     return -1;
 }
 
+// 0.2 banks (header KGRN41) had 16 knobs per track: their locks move to the new places
+inline void convertLock41(std::string& line)
+{
+    static const int to[16] = {tpPOSITION, tpSLICE, tpSCAN, tpPITCH, tpSIZE, tpDENSITY, tpSPRAY, tpSPREAD,
+                               tpATTACK, tpDECAY, tpFILTER, tpRESO, tpVOLUME, tpPAN, tpDELAY, tpREVERB};
+    int p, t, st, k, val;
+    if (line.rfind("k ", 0) != 0 || std::sscanf(line.c_str() + 2, "%d %d %d %d %d", &p, &t, &st, &k, &val) != 5 || k < 0 || k >= 16) return;
+    char b[64]; std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, to[k], val); line = b;
+}
 inline bool deserializeBank(Bank& b, const char* text)
 {
     if (!text || std::strncmp(text, "KGRN4", 5) != 0) return false;
+    const bool v41 = std::strncmp(text, "KGRN41", 6) == 0;
     b.initDefault();
     const char* s = text; std::string line;
     while (*s) {
         const char* e = std::strchr(s, '\n');
         const size_t n = e ? (size_t)(e - s) : std::strlen(s);
         line.assign(s, n);
+        if (v41) convertLock41(line);
         if (!line.empty() && line.rfind("KGRN", 0) != 0) applyCommand(b, line.c_str());
         s += n; if (*s == '\n') ++s;
     }

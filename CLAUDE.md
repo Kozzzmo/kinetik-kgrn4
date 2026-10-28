@@ -46,3 +46,30 @@ Repository: `Kozzzmo/kinetik-kgrn4` (public, created 2026-10-27; first built loc
 - Pattern CHAIN (`Chain.hpp`, shared by the five Kinetik sequencers): `Bank::chain` (line `C`), `Engine::chainPl` (start at a
   restart, `next()` at the end of the master length), CHAIN button + `ovChain` window, the view follows the chain.
 - `showPage(i)`: a step page past the end of the selected track makes the track (and the pattern) that long.
+
+## 0.3.0 — new grain engine (owner: "le moteur granulaire ne fonctionne pas vraiment"; choices: 3 modes, live input +
+CAPTURE of the last bars + LIVE material, free redesign of the knobs)
+
+- `Params.hpp`: 20 knobs (`kTrackParams`, groups `kGroupNames` / `kGroupStart`: SOURCE GRAIN COLOUR ENV MIX), modes
+  `GrainMode` (CLASSIC CLOUD LOOP, `kModeNames` / `kModeHelp`), SYNC sizes `kSyncBeats` / `syncBin`, DENSITY per mode
+  (`classicOverlap` 2-6, `cloudOverlap` 1.5-16 + `cloudRandom` right of centre, `loopCopies` 1-4), globals `gFREEZE gCAPLEN`
+  (+ output `gOUT_IN`), `kLiveSeconds` input buffer; `trackValueText(k, v, slices, mode, sync)`.
+- `Bank.hpp`: `Kit::mode`, `Kit::sync` (line `M t mat mute sliceMode amount mode sync`), header `KGRN42`; `KGRN41` banks:
+  `convertLock41` moves the 16-knob locks. Material `kMatLive` (= 9, `Materials.hpp`) = the input.
+- `Engine.hpp` rewritten: `Src` (sample or input ring, cubic read, `lo()/hi()` safe range), `spawn()` (start pushed back
+  so the whole grain fits: never a wrap / gap; REVERSE / OCTAVE / JITTER / SPREAD with a right-channel delay `offR`;
+  a few ms of random start when pitched against the scan, against combing), windows `GrainWindows` (5 tables morphed by
+  SHAPE; LOOP = trapezoid crossfade `xf`), level `1 / max(1, A^(1-incoh) * P^incoh)` from the smoothed sum of windows
+  (A) and of their squares (P) with `incoh` from how far apart the grains read; first grain at its loudest point
+  (`firstSkip` brings the next one sooner); continuous `safety()` clip. Input: `inL / inR` written into `liveL / liveR`
+  unless FREEZE, `barW` = buffer position of the last bar start, `capture(bars)` (last complete bars while playing,
+  normalized, faded), `liveWave()`. Test hooks `activeGrains`, `spawnStats`.
+- `Sample.hpp` (no longer identical to KDSP-16's): stereo `l` / `r` + mono `pcm`; stereo lines `s<track> name\tsr\tL\tR`.
+- Plugin: 2 inputs as a side-chain bus (`DISTRHO_PLUGIN_EXTRA_IO { 0, 2 }` for AU), `ioChanged`, direct access
+  (`GrainDirect.hpp`: `captureInput`, `liveWave`).
+- UI: knobs 2 x 10 (`knobR` with group gaps), MODE / SYNC buttons over the waveform, header INPUT meter / FREEZE /
+  CAPTURE length, CAPTURE button, LIVE waveform (`drawLiveWave`, redrawn 20x/s), stereo WAV loading, user presets
+  `KGRN4-PRESET 2` (version 1 files remapped).
+- 17 factory presets (Shimmer Freeze, Grid Cloud, Loop Lab, Live Granulator added). Tests: clicks (second difference on
+  a sine near the sample end), level on PAD / VOICE for every mode / size / density, CLASSIC steady level (also frozen),
+  LOOP + SYNC periodicity, REVERSE / OCTAVE ratios, stereo, LIVE / FREEZE / CAPTURE, bank conversion, CPU (~10 %).

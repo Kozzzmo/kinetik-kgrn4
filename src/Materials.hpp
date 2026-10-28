@@ -8,7 +8,8 @@
 namespace kn {
 
 static constexpr int kMaterials = 8;   // ids 1..8 (0 = the track's own sample)
-static const char* const kMaterialNames[kMaterials + 1] = {"SAMPLE", "PAD", "BELLS", "VOICE", "WIND", "PLUCKS", "BEAT", "DRONE", "GLASS"};
+static constexpr int kMatLive = kMaterials + 1;   // the audio input (LIVE), after the built-in ones
+static const char* const kMaterialNames[kMaterials + 2] = {"SAMPLE", "PAD", "BELLS", "VOICE", "WIND", "PLUCKS", "BEAT", "DRONE", "GLASS", "LIVE"};
 
 namespace mat {
 

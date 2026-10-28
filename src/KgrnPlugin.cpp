@@ -4,6 +4,7 @@
 #include "Materials.hpp"
 #include "Presets.hpp"
 #include "License.hpp"
+#include "GrainDirect.hpp"
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -16,9 +17,13 @@ using namespace kn;
 
 static constexpr uint32_t kKitBit = 1u << 16;
 
-class KgrnPlugin : public Plugin
+class KgrnPlugin : public Plugin, public GrainDirect
 {
 public:
+    // ---- GrainDirect (UI thread)
+    SamplePtr captureInput(int bars) override { return engine->capture(bars); }
+    void liveWave(float* mn, float* mx, int cols) override { engine->liveWave(mn, mx, cols); }
+
     KgrnPlugin()
         : Plugin(kTotalParams, 0, 5)
     {
@@ -42,7 +47,18 @@ protected:
     const char* getLicense() const override { return "Proprietary"; }
     uint32_t getVersion() const override { return d_version(KN_VER_MAJOR, KN_VER_MINOR, KN_VER_MICRO); }
 
-    void initAudioPort(bool input, uint32_t index, AudioPort& port) override { port.groupId = kPortGroupStereo; Plugin::initAudioPort(input, index, port); }
+    void initAudioPort(bool input, uint32_t index, AudioPort& port) override
+    {
+        if (input) {                              // the input arrives as a side-chain: instruments have no main input in most hosts
+            port.hints = kAudioPortIsSidechain;
+            port.name = index == 0 ? "Input Left" : "Input Right";
+            port.symbol = index == 0 ? "in_left" : "in_right";
+            port.groupId = kPortGroupNone;
+            return;
+        }
+        port.groupId = kPortGroupStereo; Plugin::initAudioPort(input, index, port);
+    }
+    void ioChanged(uint16_t numInputs, uint16_t) override { numIn.store(numInputs); }
 
     void initParameter(uint32_t index, Parameter& p) override
     {
@@ -69,6 +85,9 @@ protected:
         case gTEMPO: p.name = "Internal Tempo"; p.symbol = "tempo"; p.ranges.min = 40; p.ranges.max = 240; p.unit = "BPM"; return;
         case gPLAY: p.name = "Internal Play"; p.symbol = "play"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
         case gPATTERN: p.name = "Pattern"; p.symbol = "pattern"; p.ranges.max = kPatterns - 1; p.hints |= kParameterIsInteger; return;
+        case gFREEZE: p.name = "Freeze Input"; p.symbol = "freeze"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
+        case gCAPLEN: p.name = "Capture Length"; p.symbol = "cap_len"; p.ranges.max = kCapLens - 1; p.hints |= kParameterIsInteger; return;
+        case gOUT_IN: p.name = "Input Level"; p.symbol = "out_in"; p.hints = kParameterIsOutput; p.ranges.min = 0; p.ranges.max = 1; p.ranges.def = 0; return;
         case gOUT_STEP: p.name = "Play Step"; p.symbol = "out_step"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.min = -1; p.ranges.max = 32768 * Engine::kFine; return;
         case gOUT_ACTIVE: p.name = "Active Tracks"; p.symbol = "out_active"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.max = 15; return;
         case gOUT_PATTERN: p.name = "Playing Pattern"; p.symbol = "out_pattern"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.max = kPatterns - 1; return;
@@ -102,6 +121,7 @@ protected:
         case gOUT_ACTIVE: return (float)engine->outActive;
         case gOUT_PATTERN: return (float)engine->outPattern;
         case gOUT_POS1: case gOUT_POS2: case gOUT_POS3: case gOUT_POS4: return engine->outPos[g - gOUT_POS1];
+        case gOUT_IN: return std::min(1.f, engine->inPeak);
         default: return g < kGlobalParams ? engine->global[g] : 0.f;
         }
     }
@@ -195,11 +215,11 @@ protected:
     {
         for (int t = 0; t < kTracks; ++t) {
             const int m = engine->bank.kit[t].material;
-            engine->source[t] = m > 0 ? material(m).get() : smpLive[t].get();
+            engine->source[t] = m == kMatLive ? nullptr : (m > 0 ? material(m).get() : smpLive[t].get());
         }
     }
 
-    void run(const float**, float** outputs, uint32_t frames, const MidiEvent* midi, uint32_t midiCount) override
+    void run(const float** inputs, float** outputs, uint32_t frames, const MidiEvent* midi, uint32_t midiCount) override
     {
         for (int i = 0; i < kSavedParams; ++i) {
             const int32_t h = uiHold[i].load(std::memory_order_relaxed);
@@ -262,6 +282,8 @@ protected:
             const double beats = (pos.bbt.bar - 1) * (double)pos.bbt.beatsPerBar + (pos.bbt.beat - 1) + (pos.bbt.ticksPerBeat > 0 ? pos.bbt.tick / pos.bbt.ticksPerBeat : 0.0);
             tp.beat = beats * (4.0 / bt); tp.bpm = pos.bbt.beatsPerMinute > 0 ? pos.bbt.beatsPerMinute : 120.0;
         }
+        const bool in = numIn.load(std::memory_order_relaxed) >= 2 && inputs && inputs[0] && inputs[1];
+        engine->inL = in ? inputs[0] : nullptr; engine->inR = in ? inputs[1] : nullptr;
         engine->process(outputs[0], outputs[1], frames, tp, notes.data(), (uint32_t)notes.size());
         if (lic::kDemoModeEnabled && !licensed.load(std::memory_order_relaxed)) demoGate(outputs, frames);
     }
@@ -284,6 +306,7 @@ private:
     mutable std::mutex masterMutex;
     std::atomic<uint32_t> dirty{0};
     std::atomic<bool> licensed{false};
+    std::atomic<int> numIn{DISTRHO_PLUGIN_NUM_INPUTS};
     SamplePtr smpPend[kTracks], smpLive[kTracks], smpGrave[kTracks];
     bool smpSet[kTracks] = {};
     std::atomic<bool> smpDirty{false};

@@ -54,7 +54,11 @@ int main()
         e->global[gPLAY] = 1.f; e->bank = pb;
         for (int t = 0; t < kTracks; ++t) e->source[t] = material(pb.kit[t].material).get();
         std::vector<float> L(48000 * 3), R(L.size());
-        for (size_t p = 0; p < L.size(); p += 512) e->process(L.data() + p, R.data() + p, (uint32_t)std::min<size_t>(512, L.size() - p), Transport());
+        const std::vector<float>& in = material(3)->pcm;          // LIVE tracks hear the voice material on the input
+        for (size_t p = 0; p < L.size(); p += 512) {
+            e->inL = e->inR = in.data() + (p % (in.size() - 1024));
+            e->process(L.data() + p, R.data() + p, (uint32_t)std::min<size_t>(512, L.size() - p), Transport());
+        }
         double s = 0; float pk = 0; bool fin = true;
         for (size_t j = 0; j < L.size(); ++j) { s += L[j] * L[j] + R[j] * R[j]; pk = std::max(pk, std::max(std::fabs(L[j]), std::fabs(R[j]))); fin = fin && std::isfinite(L[j]); }
         const double rms = std::sqrt(s / (2.0 * L.size()));

@@ -18,7 +18,9 @@ namespace kn {
 static constexpr float kMaxSampleSeconds = 20.f;
 
 struct SampleData {
-    std::vector<float> pcm;     // mono
+    std::vector<float> pcm;     // mono (the mix of l / r for a stereo sample: slicer, waveform)
+    std::vector<float> l, r;    // KGRN-4: the two channels of a stereo sample (empty = mono)
+    bool stereo() const { return !l.empty() && l.size() == pcm.size() && r.size() == pcm.size(); }
     double sr = 48000.0;
     std::string name;           // file name, for the display
     uint32_t frames() const { return (uint32_t)pcm.size(); }
@@ -220,8 +222,50 @@ inline SamplePtr decode(const char* s, size_t n, bool packed = false)
     if (d->pcm.empty()) return nullptr;
     return d;
 }
-// one line "z<track> <encoded>"
-inline std::string encodeLine(int t, const SampleData& s) { return "z" + std::to_string(t) + " " + encode(s); }
+inline std::string packChannel(const std::vector<float>& v)
+{
+    std::vector<int32_t> x(v.size());
+    for (size_t i = 0; i < v.size(); ++i) x[i] = toPcm16(v[i]);
+    const std::vector<uint8_t> b = pack(x);
+    return base64(b.data(), b.size());
+}
+inline bool unpackChannel(const char* s, size_t n, std::vector<float>& out)
+{
+    const std::vector<uint8_t> b = unbase64(s, n);
+    std::vector<int32_t> x;
+    if (!unpack(b.data(), b.size(), x)) return false;
+    out.resize(x.size());
+    for (size_t i = 0; i < x.size(); ++i) out[i] = (float)x[i] / 32767.f;
+    return true;
+}
+// stereo (KGRN-4): "name<TAB>samplerate<TAB>left<TAB>right", each channel packed as above
+inline std::string encodeStereo(const SampleData& s)
+{
+    char srb[32]; std::snprintf(srb, sizeof(srb), "%.0f", s.sr);
+    return cleanSampleName(s.name) + "\t" + srb + "\t" + packChannel(s.l) + "\t" + packChannel(s.r);
+}
+inline SamplePtr decodeStereo(const char* s, size_t n)
+{
+    const char* e = s + n;
+    const char* t1 = (const char*)std::memchr(s, '\t', n); if (!t1) return nullptr;
+    const char* t2 = (const char*)std::memchr(t1 + 1, '\t', (size_t)(e - t1 - 1)); if (!t2) return nullptr;
+    const char* t3 = (const char*)std::memchr(t2 + 1, '\t', (size_t)(e - t2 - 1)); if (!t3) return nullptr;
+    auto d = std::make_shared<SampleData>();
+    d->name.assign(s, t1);
+    d->sr = std::atof(std::string(t1 + 1, t2).c_str());
+    if (!(d->sr >= 4000.0 && d->sr <= 384000.0)) return nullptr;
+    if (!unpackChannel(t2 + 1, (size_t)(t3 - t2 - 1), d->l) || !unpackChannel(t3 + 1, (size_t)(e - t3 - 1), d->r)) return nullptr;
+    if (d->l.empty() || d->l.size() != d->r.size()) return nullptr;
+    d->pcm.resize(d->l.size());
+    for (size_t i = 0; i < d->pcm.size(); ++i) d->pcm[i] = 0.5f * (d->l[i] + d->r[i]);
+    return d;
+}
+// one line "z<track> <encoded>" ("s<track> ..." for a stereo sample: older versions skip it)
+inline std::string encodeLine(int t, const SampleData& s)
+{
+    if (s.stereo()) return "s" + std::to_string(t) + " " + encodeStereo(s);
+    return "z" + std::to_string(t) + " " + encode(s);
+}
 
 // All tracks: lines "<track> <encoded>"
 template <class Arr>
@@ -242,14 +286,14 @@ void decodeAll(const char* text, Fn fn)
         const char* e = std::strchr(s, '\n');
         const size_t len = e ? (size_t)(e - s) : std::strlen(s);
         if (len > 0) {
-            const bool packed = *s == 'z';
-            const char* num = packed ? s + 1 : s;
+            const bool packed = *s == 'z', st = *s == 's';
+            const char* num = packed || st ? s + 1 : s;
             char* end = nullptr;
             const long t = (*num >= '0' && *num <= '9') ? std::strtol(num, &end, 10) : 0;
             if (end && end != num && (size_t)(end - s) <= len) {
                 const char* rest = end; while (rest < s + len && *rest == ' ') ++rest;
                 const size_t rl = len - (size_t)(rest - s);
-                fn((int)t, rl > 0 ? decode(rest, rl, packed) : SamplePtr());
+                fn((int)t, rl > 0 ? (st ? decodeStereo(rest, rl) : decode(rest, rl, packed)) : SamplePtr());
             }
         }
         s = e ? e + 1 : nullptr;
