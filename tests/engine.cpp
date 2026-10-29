@@ -631,6 +631,32 @@ int main()
         for (int p = 256; p < 24000; p += 256) f->process(L2.data() + p, R2.data() + p, 256, Transport());
         check(rms(L, 6000, 24000) < 0.4f * rms(L2, 6000, 24000), "VELOCITY: soft notes are quieter");
     }
+    {   // 0.7.1: the effects are KDSP-16's: every echo model and every reverb model sounds different, and they are loud enough
+        auto run = [&](int g, float val, int send) {
+            auto e = make(material(2).get());
+            e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->bank.patterns[0].gate[0][0] = 2;
+            e->trackParam[0][send] = 90.f; e->trackParam[0][tpRELEASE] = 0.f;
+            e->global[g] = val;
+            return render(*e, 72000);
+        };
+        auto diff = [&](const Run& a, const Run& b) { double d = 0, s2 = 0; for (int i = 6000; i < 72000; ++i) { d += (a.L[i] - b.L[i]) * (a.L[i] - b.L[i]); s2 += a.L[i] * a.L[i]; } return std::sqrt(d / (s2 + 1e-12)); };
+        std::vector<Run> echo, rev;
+        for (int m = 0; m < 8; ++m) echo.push_back(run(gECHO_MODEL, (float)echoModelValue(m), tpDELAY));
+        for (int m = 0; m < 5; ++m) rev.push_back(run(gREV_MODEL, (float)reverbModelValue(m), tpREVERB));
+        float minE = 9, minR = 9;
+        for (int a = 0; a < 8; ++a) for (int b = a + 1; b < 8; ++b) minE = std::min(minE, (float)diff(echo[a], echo[b]));
+        for (int a = 0; a < 5; ++a) for (int b = a + 1; b < 5; ++b) minR = std::min(minR, (float)diff(rev[a], rev[b]));
+        // how loud the effect is against the dry sound (the same note without send)
+        Run dryR = run(gECHO_MODEL, 0.f, tpCHORUS); for (int i = 0; i < 72000; ++i) { dryR.L[i] = dryR.L[i]; }
+        auto dryRun = [&]() { auto e = make(material(2).get()); e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->bank.patterns[0].gate[0][0] = 2;
+                              e->trackParam[0][tpRELEASE] = 0.f; return render(*e, 72000); };
+        const Run d0 = dryRun();
+        auto wetDb = [&](const Run& w) { double a2 = 0, b2 = 0; for (int i = 0; i < 72000; ++i) { const double x = w.L[i] - d0.L[i]; a2 += x * x; b2 += d0.L[i] * d0.L[i]; } return 10 * std::log10(a2 / (b2 + 1e-12)); };
+        const double we = wetDb(echo[0]), wr = wetDb(rev[2]);
+        std::printf("     echo models differ by >= %.2f, reverb models by >= %.2f; echo %.1f dB, reverb %.1f dB against the dry sound\n", minE, minR, we, wr);
+        check(minE > 0.1f && minR > 0.1f, "every echo model and every reverb model sounds different");
+        check(we > -12.0 && wr > -12.0, "echo and reverb at send 90 are clearly audible against the dry sound");
+    }
     {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());
         for (int t = 0; t < kTracks; ++t) {

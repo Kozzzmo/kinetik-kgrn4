@@ -65,6 +65,8 @@ struct PB {
     {
         for (auto& p : kv) {
             if (p.first == kOldFilter) { int ty, cu; convertFilter05((int)std::lround(p.second), ty, cu); v[tpIndex(t, tpFTYPE)] = (float)ty; v[tpIndex(t, tpCUTOFF)] = (float)cu; }
+            // DELAY / REVERB were voiced on squared sends: the same send level on the linear ones of 0.7.1
+            else if (p.first == tpDELAY || p.first == tpREVERB) v[tpIndex(t, p.first)] = std::round(p.second * p.second / (127.f * 1.4f));
             else v[tpIndex(t, p.first)] = p.second;
         }
     }

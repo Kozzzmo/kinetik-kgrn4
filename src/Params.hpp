@@ -155,7 +155,7 @@ inline float trackDefault(int t, int k)
         {   0, 127,  0,  0,  96,   0, 64, 127,   48,   0,  10,  25,   0,  0,  0, 64,    0, 64, 127, 30, 64,  0,100, 64 },
         {   0, 127, 20,  0,  70,  70, 64, 127,   45, 110,  70, 110,  25, 30, 25, 64,    0, 90,  80, 70, 64,  0, 84, 64 },
     };
-    static const int8_t sends[kTracks][4] = {{0, 45, 0, 127}, {20, 35, 0, 127}, {0, 12, 0, 127}, {40, 50, 0, 127}};
+    static const int8_t sends[kTracks][4] = {{0, 30, 0, 127}, {18, 24, 0, 127}, {0, 8, 0, 127}, {30, 34, 0, 127}};
     if (t < 0 || t >= kTracks || k < 0) return trackParamDefault(k);
     if (k < tpNSCALE) return d[t][k];
     if (k >= tpATTACK && k <= tpPAN) return d[t][16 + k - tpATTACK];

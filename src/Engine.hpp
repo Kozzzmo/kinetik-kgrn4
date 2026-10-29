@@ -949,8 +949,9 @@ private:
         if (T.vol == 0.f) T.vol = T.volT;
         T.drive = kv(T, nv, knobs, tpDRIVE) / 127.f;
         const float d = kv(T, nv, knobs, tpDELAY) / 127.f, r = kv(T, nv, knobs, tpREVERB) / 127.f;
-        T.dSend = d * d; T.rSend = r * r;
-        const float c = kv(T, nv, knobs, tpCHORUS) / 127.f; T.cSend = c * c;
+        // sends as in KDSP-16: linear, up to x1.4 (they were squared before 0.7.1: the effects were 9-12 dB too quiet)
+        T.dSend = d * 1.4f; T.rSend = r * 1.4f;
+        T.cSend = kv(T, nv, knobs, tpCHORUS) / 127.f * 1.4f;
         T.gSend = kv(T, nv, knobs, tpCHAOS) / 127.f;
     }
 

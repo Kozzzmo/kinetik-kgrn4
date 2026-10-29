@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- The effects (KDSP-16's echo, reverb, chorus and CHAOS engines) were fed far too softly: the track sends were squared,
+  so a send at 50 % reached the effect 12 dB lower than on KDSP-16. The sends are now linear, up to x1.4, as on KDSP-16;
+  the factory presets keep their balance, new tracks start with moderate sends.
+- Test: every echo model and every reverb model sounds different, and their level against the dry sound is checked.
+
 ## 0.7.0
 
 - Knob pages: SOURCE, GRAIN, NOTES, AMP, FILTER, FX, ARP, LFO 1-3, drawn as tabs (distinct from the buttons above them).

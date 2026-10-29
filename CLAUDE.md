@@ -164,3 +164,10 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
   `runArp` per segment on the beat grid with swing, LENGTH / REPEAT, CHORD plays all).
 - UI: `pageBar` tabs, `mixZone` fader (`drawMix`, `mixAt`, `dkMix`), `trackResetBtn` -> `resetTrack`, wheel on steps
   with modifiers (onScroll), MATERIAL shows `srcName`, red UNDO (as KMSP-6). User presets `KGRN4-PRESET 5` (1-4 converted).
+
+## 0.7.1 (owner: "tu as repris les noms et l'emplacement des paramètres mais pas les moteurs ?")
+
+- The engines were KDSP-16's (`MasterFx.hpp` identical) but the sends were squared (`d * d`): 9-12 dB too little into the
+  effects. Now `T.dSend / rSend / cSend = send / 127 * 1.4` as `Engine::controlTrack` of KDSP-16; `PB::tp` converts the
+  presets' DELAY / REVERB (voiced on the squared curve: v^2 / (127 * 1.4)); `trackDefault` sends lowered. Test: models differ,
+  wet level against the dry note (> -12 dB at send 90).
