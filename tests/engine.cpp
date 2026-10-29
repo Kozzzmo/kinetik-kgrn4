@@ -482,6 +482,19 @@ int main()
         bool ok = true; for (float v : r.L) ok = ok && std::isfinite(v) && std::fabs(v) <= 1.5f;
         check(ok && rms(r.L, 0, 96000) > 1e-3f, "all effects at their extremes: finite, bounded, audible");
     }
+    {   // 0.4.1: the grain display sees every grain, where it reads and at which pitch (a MIN7 chord = 4 voices, 0 3 7 10)
+        auto e = make(material(1).get());
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.chord[0][0] = 5;
+        e->trackParam[0][tpDENSITY] = 100.f;
+        render(*e, 24000);
+        GrainView g[kViewGrains]; VoiceView v[8]; int nv = 0;
+        const int n = e->grainView(0, g, kViewGrains, v, 8, nv);
+        bool inside = true, pitches[11] = {};
+        for (int i = 0; i < n; ++i) { inside = inside && g[i].a >= 0.f && g[i].a <= 1.f && g[i].b >= 0.f && g[i].b <= 1.f && g[i].ph >= 0.f && g[i].ph <= 1.f;
+                                      const int st = (int)std::lround(g[i].semis); if (st >= 0 && st <= 10) pitches[st] = true; }
+        check(n == e->activeGrains(0) && n >= 8 && nv == 4 && inside, "grain view: every grain, inside the material, 4 voices");
+        check(pitches[0] && pitches[3] && pitches[7] && pitches[10], "grain view: the chord's pitches (0 3 7 10)");
+    }
     {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());
         for (int t = 0; t < kTracks; ++t) {

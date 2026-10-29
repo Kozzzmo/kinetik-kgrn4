@@ -23,6 +23,13 @@
 #include <deque>
 #include <chrono>
 
+// NanoVG's blending (compiled into DGL): additive drawing for the grain clouds
+struct NVGcontext;
+extern "C" {
+void nvgGlobalCompositeBlendFunc(NVGcontext* ctx, int sfactor, int dfactor);
+void nvgGlobalCompositeOperation(NVGcontext* ctx, int op);
+}
+
 START_NAMESPACE_DISTRHO
 
 using namespace kn;
@@ -327,6 +334,37 @@ protected:
     }
     void sendPatternSettings() { char b[48]; std::snprintf(b, sizeof(b), "P %d %d %d", editPattern(), pat().length, pat().swing); sendCmd(b); }
     void sendTrackSettings(int t) { char b[48]; std::snprintf(b, sizeof(b), "L %d %d %d %d", editPattern(), t, pat().len[t], pat().speed[t]); sendCmd(b); }
+    // the on-screen keyboard: a key plays its chord (CHORD), LATCH keeps keys down until clicked again
+    std::vector<int> latched;                    // latched keys (their chords sound)
+    int mouseKey = -1;                           // key held with the mouse
+    bool pcDown[128] = {};
+    bool keyIsHeld(int n) const { return n == mouseKey || (n >= 0 && n < 128 && pcDown[n]) || std::find(latched.begin(), latched.end(), n) != latched.end(); }
+    void keyChordNotes(int n, bool on)
+    {
+        const ChordDef& c = kChords[keyChord % kChordCount];
+        std::string cmd; char b[32];
+        for (int i = 0; i < c.n; ++i) { std::snprintf(b, sizeof(b), "%s %d %d\n", on ? "trig" : "rel", selTrack, clampi(n + c.notes[i], 0, 127)); cmd += b; }
+        cmd.pop_back(); setState("cmd", cmd.c_str());
+    }
+    void keyPress(int n)
+    {
+        if (keyLatch) {
+            auto it = std::find(latched.begin(), latched.end(), n);
+            if (it != latched.end()) { latched.erase(it); keyChordNotes(n, false); }
+            else { latched.push_back(n); keyChordNotes(n, true); }
+        } else keyChordNotes(n, true);
+        if (lane == lnNote && noteStep >= 0 && noteStep < pat().len[selTrack]) setStepNote(noteStep, n);
+        repaint();
+    }
+    void keyRelease(int n) { if (!keyLatch) keyChordNotes(n, false); repaint(); }
+    void releaseAllKeys()
+    {
+        for (int n : latched) keyChordNotes(n, false);
+        latched.clear();
+        if (mouseKey >= 0 && !keyLatch) keyChordNotes(mouseKey, false);
+        mouseKey = -1;
+        for (int n = 0; n < 128; ++n) if (pcDown[n]) { keyChordNotes(n, false); pcDown[n] = false; }
+    }
     void keyNote(int t, int n, bool on) { char b[32]; std::snprintf(b, sizeof(b), "%s %d %d", on ? "trig" : "rel", t, n); sendCmd(b); }
 
     // ------------------------------------------------------------------ layout (0.4: one track at a time, as KMSP-6 / KDSP-16)
@@ -348,7 +386,8 @@ protected:
     R modeBtn() const { return {300.f, 122.f, 128.f, 22.f}; }
     R syncBtn() const { return {432.f, 122.f, 60.f, 22.f}; }
     R legatoBtn() const { return {496.f, 122.f, 76.f, 22.f}; }
-    R lockClearBtn() const { return {588.f, 122.f, 108.f, 22.f}; }
+    R lockClearBtn() const { return {190.f, 122.f, 104.f, 22.f}; }
+    R zoomBtn2() const { return {588.f, 122.f, 58.f, 22.f}; }
     R waveR() const { return {20.f, 148.f, 678.f, 118.f}; }
     R loadBtn() const { return {20.f, 272.f, 64.f, 26.f}; }
     R matBtn() const { return {88.f, 272.f, 150.f, 26.f}; }
@@ -411,6 +450,9 @@ protected:
         for (int n = lo; n <= hi; ++n) if (!isBlack(n) && keyRect(n).in(x, y)) return n;
         return -1;
     }
+    R keyChordBtn() const { return {900.f, 610.f, 128.f, 28.f}; }
+    R latchBtn() const { return {1032.f, 610.f, 128.f, 28.f}; }
+    R pcKeysBtn() const { return {900.f, 642.f, 260.f, 28.f}; }
     R notesOffBtn() const { return {900.f, 674.f, 260.f, 30.f}; }
     R gripR() const { return {W - 22.f, H - 22.f, 22.f, 22.f}; }
     // overlays
@@ -569,24 +611,37 @@ protected:
     }
 
     // waveform envelope cache of a track's material
-    struct WaveCache { const SampleData* src = nullptr; std::vector<float> mn, mx; };
+    struct WaveCache { const SampleData* src = nullptr; float v0 = 0.f, v1 = 1.f; std::vector<float> mn, mx; };
     WaveCache wave[kTracks];
-    const WaveCache& waveOf(int t, int cols)
+    const WaveCache& waveOf(int t, int cols, float v0 = 0.f, float v1 = 1.f)
     {
         WaveCache& w = wave[t];
         const SampleData* s = srcOf(t);
-        if (w.src == s && (int)w.mn.size() == cols) return w;
-        w.src = s; w.mn.assign(cols, 0.f); w.mx.assign(cols, 0.f);
+        if (w.src == s && (int)w.mn.size() == cols && w.v0 == v0 && w.v1 == v1) return w;
+        w.src = s; w.v0 = v0; w.v1 = v1; w.mn.assign(cols, 0.f); w.mx.assign(cols, 0.f);
         if (!s || s->pcm.empty()) return w;
         const size_t n = s->pcm.size();
+        const double sa = v0 * (double)n, sw = (v1 - v0) * (double)n;
         for (int c = 0; c < cols; ++c) {
-            const size_t a = n * c / cols, e = std::max(a + 1, n * (c + 1) / cols);
+            const size_t a = std::min(n - 1, (size_t)(sa + sw * c / cols)), e = std::max(a + 1, (size_t)(sa + sw * (c + 1) / cols));
             float lo = 0.f, hi = 0.f;
             for (size_t i = a; i < e && i < n; ++i) { lo = std::min(lo, s->pcm[i]); hi = std::max(hi, s->pcm[i]); }
             w.mn[c] = lo; w.mx[c] = hi;
         }
         return w;
     }
+    // the part of the material the display shows: all of it, or (ZOOM) START .. END with a margin
+    float vA = 0.f, vB = 1.f;
+    void updateView()
+    {
+        vA = 0.f; vB = 1.f;
+        if (!zoom || liveTrack(selTrack)) return;
+        double a, e, p; playRegion(a, e, p);
+        const double m = std::max(0.004, (e - a) * 0.1);
+        vA = (float)std::max(0.0, a - m); vB = (float)std::min(1.0, e + m);
+        if (vB - vA < 0.002f) vB = std::min(1.f, vA + 0.002f);
+    }
+    float fx(float f) const { const R wr = waveR(); return wr.x + 4 + (f - vA) / (vB - vA) * (wr.w - 8); }
     // where START, END and POSITION are in the display (fractions of the whole material, or of the LIVE window)
     void playRegion(double& a, double& b, double& p)
     {
@@ -603,8 +658,116 @@ protected:
         a = ra + s0 * (rb - ra); b = ra + s1 * (rb - ra);
         p = a + knobValue(tpPOSITION) / 127.0 * (b - a);
     }
+    // ---- the grains: every grain as its window, over the stretch of material it reads
+    GrainView gv[kViewGrains]; VoiceView vv[8]; int gvN = 0, vvN = 0;
+    void fetchView(int t) { gvN = direct ? direct->grainView(t, gv, kViewGrains, vv, 8, vvN) : 0; if (!direct) vvN = 0; }
+    // one colour per voice (no pink); darker on light skins
+    Color voiceColor(int slot) const
+    {
+        static const uint8_t pal[8][3] = {{125, 255, 90}, {255, 214, 64}, {80, 220, 255}, {255, 150, 50},
+                                          {235, 235, 235}, {150, 170, 255}, {200, 255, 120}, {255, 110, 80}};
+        const uint8_t* c = pal[slot & 7];
+        const float lum = 0.3f * th->lcdBg.red + 0.59f * th->lcdBg.green + 0.11f * th->lcdBg.blue;
+        const float k = lum > 0.5f ? 0.5f : 1.f;
+        return Color((int)(c[0] * k), (int)(c[1] * k), (int)(c[2] * k));
+    }
+    // the grain window as the engine shapes it (SHAPE: square, triangle, smooth, percussive, reversed percussive; LOOP: crossfade)
+    static float winTable(int w, float x)
+    {
+        x = clampf(x, 0.f, 1.f);
+        switch (w) {
+        case 0: return std::min(1.f, std::min(x, 1.f - x) / 0.06f);
+        case 1: return 1.f - std::fabs(2.f * x - 1.f);
+        case 2: return 0.5f - 0.5f * std::cos(kTwoPi * x);
+        case 3: return std::min(1.f, x / 0.04f) * std::exp(-4.5f * x) * std::min(1.f, (1.f - x) / 0.05f) * 1.25f;
+        default: return winTable(3, 1.f - x);
+        }
+    }
+    float grainProfile(float x, float shape, bool loop) const
+    {
+        if (loop) { const float xf = (0.005f + shape * 0.5f) / (1.005f + shape * 0.5f); const float d = std::min(x, 1.f - x); return d >= xf ? 1.f : d / std::max(1e-3f, xf); }
+        const float a = shape * 4.f; const int w = std::min(3, (int)a); const float f = a - w;
+        return std::min(1.f, winTable(w, x) * (1.f - f) + winTable(w + 1, x) * f);
+    }
+    // grains: x = the stretch of material each one reads (its window drawn over it, time from left to right, so a
+    // reversed grain runs right to left), height = its pitch against the sample (+-24 st) with its pan as a small offset,
+    // brightness = where it is in its window x the note's envelope, colour = its voice; outline = original pitch (PITCH MIX),
+    // white outline = OCTAVE, arrow = REVERSE
+    float pitchRange = 7.f;                       // semitones from the centre to the top: follows the grains (7 .. 25)
+    float pitchY(float semis, const R& wr) const { return wr.cy() - clampf(semis, -pitchRange, pitchRange) / pitchRange * (wr.h * 0.5f - 10.f); }
+    void drawGrains(const R& wr)
+    {
+        const float shape = knobValue(tpSHAPE) / 127.f;
+        float envOf[8] = {}; bool relOf[8] = {};
+        for (int i = 0; i < vvN; ++i) { envOf[vv[i].slot & 7] = vv[i].env; relOf[vv[i].slot & 7] = vv[i].released != 0; }
+        const float top = wr.y + 4, bot = wr.y + wr.h - 4;
+        {   // the pitch scale follows the grains (grows at once, shrinks slowly)
+            float m = 6.f; for (int i = 0; i < gvN; ++i) m = std::max(m, std::fabs(gv[i].semis) + 1.f);
+            m = std::min(25.f, m);
+            pitchRange = m > pitchRange ? m : pitchRange + (m - pitchRange) * 0.03f;
+        }
+        if (gvN > 0) {                                                   // pitch guides: 0, +-12, +-24
+            for (int st : {-24, -12, 0, 12, 24}) {
+                if (std::abs(st) > pitchRange) continue;
+                const float y = pitchY((float)st, wr);
+                beginPath(); rect(wr.x + 4, y, wr.w - 8, 1.f); fillColor(withAlpha(th->lcdDim, st == 0 ? 0.35f : 0.18f)); fill();
+                label(wr.x + wr.w - 6, y - 5, st == 0 ? "0" : (st == 12 ? "+12" : st == -12 ? "-12" : st > 0 ? "+24" : "-24"), 7.5f, withAlpha(th->lcdDim, 0.8f), ALIGN_RIGHT | ALIGN_MIDDLE);
+            }
+        }
+        for (int i = 0; i < vvN; ++i) {                                  // the voices' play heads (thin, in their colour)
+            const float x = fx(vv[i].head);
+            beginPath(); rect(x - 0.5f, top, 1.f, bot - top); fillColor(withAlpha(voiceColor(vv[i].slot), relOf[vv[i].slot & 7] ? 0.2f : 0.5f)); fill();
+        }
+        ::nvgGlobalCompositeBlendFunc(getContext(), 1 << 6, 1 << 1);   // SRC_ALPHA, ONE: dense clouds glow
+        float semisMin = 99.f, semisMax = -99.f, panSum = 0.f; int nRev = 0, nOct = 0, nOrig = 0;
+        for (int i = 0; i < gvN; ++i) {
+            const GrainView& g = gv[i];
+            const bool loop = (g.flags & kGvLoop) != 0;
+            const float env = std::max(0.02f, envOf[g.voice & 7]);
+            float xa = fx(g.a), xb = fx(g.b);
+            if (std::fabs(xb - xa) < 8.f) { const float m = 0.5f * (xa + xb), d = xb >= xa ? 4.f : -4.f; xa = m - d; xb = m + d; }
+            const float yc = clampf(pitchY(g.semis, wr) + g.pan * 6.f, top + 4.f, bot - 4.f);
+            const float H = 2.5f + 7.5f * std::sqrt(env);
+            const float lit = clampf(g.amp / env, 0.f, 1.f);              // where the grain is in its window
+            const Color c = voiceColor(g.voice);
+            const bool orig = (g.flags & kGvOriginal) != 0, oct = (g.flags & kGvOctave) != 0;
+            beginPath();
+            for (int k = 0; k <= 14; ++k) { const float u = k / 14.f; const float x = xa + (xb - xa) * u; const float y = yc - grainProfile(u, shape, loop) * H; if (k == 0) moveTo(x, y); else lineTo(x, y); }
+            for (int k = 14; k >= 0; --k) { const float u = k / 14.f; lineTo(xa + (xb - xa) * u, yc + grainProfile(u, shape, loop) * H); }
+            closePath();
+            fillColor(withAlpha(c, orig ? 0.06f + 0.16f * lit : 0.16f + 0.5f * lit)); fill();
+            strokeColor(withAlpha(oct ? Color(255, 255, 255) : c, (orig ? 0.5f : 0.25f) + 0.45f * lit)); strokeWidth(oct ? 1.3f : 0.8f); stroke();
+            const float xn = xa + (xb - xa) * g.ph;                       // where it reads now
+            beginPath(); circle(xn, yc, 1.3f + 1.7f * lit); fillColor(withAlpha(c, 0.55f + 0.45f * lit)); fill();
+            if (g.flags & kGvReverse) {
+                const float d = xb < xa ? -1.f : 1.f;
+                beginPath(); moveTo(xn + d * 6.f, yc); lineTo(xn + d * 2.f, yc - 3.f); lineTo(xn + d * 2.f, yc + 3.f); closePath(); fillColor(withAlpha(c, 0.3f + 0.7f * lit)); fill();
+                ++nRev;
+            }
+            semisMin = std::min(semisMin, g.semis); semisMax = std::max(semisMax, g.semis); panSum += std::fabs(g.pan);
+            nOct += oct; nOrig += orig;
+        }
+        ::nvgGlobalCompositeOperation(getContext(), 0);              // SOURCE_OVER
+        if (gvN > 0 || vvN > 0) {
+            char b[96];
+            int nv = 0; for (int i = 0; i < vvN; ++i) nv += !vv[i].released;
+            std::snprintf(b, sizeof(b), "%d GRAINS  %d %s", gvN, nv, nv == 1 ? "VOICE" : "VOICES");
+            std::string st = b;
+            if (gvN > 0) {
+                if (semisMax - semisMin >= 0.5f) { std::snprintf(b, sizeof(b), "  %+.0f..%+.0f ST", semisMin, semisMax); st += b; }
+                else if (std::fabs(semisMin) >= 0.5f) { std::snprintf(b, sizeof(b), "  %+.0f ST", semisMin); st += b; }
+                std::snprintf(b, sizeof(b), "  WIDTH %d%%", (int)std::lround(panSum / gvN * 100.f)); st += b;
+                if (nRev) { std::snprintf(b, sizeof(b), "  %d REV", nRev); st += b; }
+                if (nOct) { std::snprintf(b, sizeof(b), "  %d OCT", nOct); st += b; }
+                if (nOrig) { std::snprintf(b, sizeof(b), "  %d ORIG", nOrig); st += b; }
+            }
+            label(wr.cx(), wr.y + wr.h - 9, st.c_str(), 8.f, th->lcdDim);
+        }
+    }
     void drawDisplay()
     {
+        fetchView(selTrack);
+        updateView();
         panelBox({14.f, 116.f, 690.f, 330.f});
         const int t = selTrack;
         const Kit& kit = bank->kit[t];
@@ -624,6 +787,7 @@ protected:
         button(modeBtn(), b, false, 9.f);
         button(syncBtn(), "SYNC", kit.sync != 0, 9.f);
         button(legatoBtn(), "LEGATO", kit.legato != 0, 9.f);
+        if (!liveTrack(t)) button(zoomBtn2(), "ZOOM", zoom, 9.f);
         const SampleData* s = srcOf(t);
         const R wr = waveR();
         box(wr, th->lcdBg); frame(wr, th->panelEdge, -1.f, th->panelEdgeWidth);
@@ -639,6 +803,7 @@ protected:
         }
         const int cols = (int)wr.w - 8;
         const float x0 = wr.x + 4, cy = wr.cy(), hh = wr.h * 0.42f;
+        scissor(wr.x + 1, wr.y + 1, wr.w - 2, wr.h - 2);
         bool drawn = false;
         if (liveTrack(t)) {
             if (!direct) label(wr.cx(), wr.cy(), "LIVE INPUT (not reachable in this host)", 10.f, th->lcdDim);
@@ -660,13 +825,13 @@ protected:
             label(wr.cx(), wr.cy() - 8, "NO SAMPLE ON THIS TRACK", 11.f, th->lcdDim);
             label(wr.cx(), wr.cy() + 12, "LOAD a WAV / AIFF file, drop one here, or choose a MATERIAL", 9.5f, th->lcdDim);
         } else {
-            const WaveCache& w = waveOf(t, cols);
+            const WaveCache& w = waveOf(t, cols, vA, vB);
             beginPath();
             for (int c = 0; c < cols; ++c) rect(x0 + c, cy - w.mx[c] * hh, 1.f, std::max(1.f, (w.mx[c] - w.mn[c]) * hh));
-            fillColor(withAlpha(th->lcdText, 0.85f)); fill();
+            fillColor(withAlpha(th->lcdText, gvN > 0 ? 0.2f : 0.85f)); fill();          // dimmer while grains are drawn on it
             const int slice = sliceOf(knobValue(tpSLICE), kit.nSlices);
             for (int i = 0; i < kit.nSlices; ++i) {
-                const float x = x0 + kit.slice[i] * 1e-6f * cols;
+                const float x = fx(kit.slice[i] * 1e-6f);
                 beginPath(); rect(x, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lcdDim, i == slice ? 1.f : 0.5f)); fill();
                 if (kit.nSlices > 1) {
                     std::snprintf(b, sizeof(b), "%d", i + 1);
@@ -677,7 +842,7 @@ protected:
         }
         if (drawn) {
             double a, e, p; playRegion(a, e, p);
-            const float xa = x0 + (float)a * cols, xe = x0 + (float)e * cols, xp = x0 + (float)p * cols;
+            const float xa = fx((float)a), xe = fx((float)e), xp = fx((float)p);
             // outside START .. END: darkened
             const Color shade = withAlpha(th->lcdBg, 0.72f);
             if (xa > x0) { beginPath(); rect(x0, wr.y + 2, xa - x0, wr.h - 4); fillColor(shade); fill(); }
@@ -696,15 +861,9 @@ protected:
             // POSITION
             beginPath(); moveTo(xp, wr.y + wr.h - 2); lineTo(xp - 5, wr.y + wr.h - 10); lineTo(xp + 5, wr.y + wr.h - 10); closePath(); fillColor(th->lock); fill();
             beginPath(); rect(xp, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lock, 0.7f)); fill();
-            // the play heads of the sounding voices
-            float heads[8]; int nh = direct ? direct->voiceHeads(t, heads, 8) : 0;
-            if (!direct && gp(gOUT_POS1 + t) >= 0.f) { heads[0] = gp(gOUT_POS1 + t); nh = 1; }
-            for (int i = 0; i < nh; ++i) {
-                const float x = x0 + clampf(heads[i], 0.f, 1.f) * cols;
-                beginPath(); rect(x - 1, wr.y + 2, 2.f, wr.h - 4); fillColor(ledColor()); fill();
-            }
-            if (nh > 0) { std::snprintf(b, sizeof(b), nh == 1 ? "%d VOICE" : "%d VOICES", nh); label(wr.cx(), wr.y + wr.h - 9, b, 8.f, th->lcdDim); }
+            drawGrains(wr);
         }
+        resetScissor();
         button(loadBtn(), "LOAD", false, 10.5f);
         std::snprintf(b, sizeof(b), "MATERIAL: %s", kit.material ? kMaterialNames[std::min<int>(kit.material, kMatLive)] : "SAMPLE");
         button(matBtn(), b, kit.material == kMatLive, 9.5f);
@@ -975,8 +1134,11 @@ protected:
         auto lum = [](const Color& c) { return 0.3f * c.red + 0.59f * c.green + 0.11f * c.blue; };
         const Color whiteKey = lum(th->text) > lum(th->stepFill) ? Color(th->text, th->panel, 0.12f) : th->stepFill;
         const Color blackKey = lum(th->knobBody) < lum(th->text) ? th->knobBody : th->text;
+        int lit[128]; for (int& v : lit) v = -1;            // keys of the sounding voices, in their colour
+        for (int i = 0; i < vvN; ++i) if (!vv[i].released && vv[i].note >= 0 && vv[i].note < 128) lit[vv[i].note] = vv[i].slot;
         auto keyColor = [&](int n, bool black) -> Color {
-            if (n == keyHeld) return th->accent;
+            if (lit[n] >= 0) return Color(voiceColor(lit[n]), black ? blackKey : whiteKey, 0.15f);
+            if (keyIsHeld(n)) return th->accent;
             if (n == stepNote) return th->lock;
             if (n == kBaseNote) return Color(black ? blackKey : whiteKey, th->accent, 0.25f);   // the sample's own pitch
             return black ? blackKey : whiteKey;
@@ -989,9 +1151,10 @@ protected:
         }
         for (int n = lo; n <= hi; ++n) if (isBlack(n)) box(keyRect(n), keyColor(n, true), 2.f);
         std::snprintf(nb, sizeof(nb), "T%d", selTrack + 1);
-        label(904, 594, (std::string("KEYS PLAY ") + nb).c_str(), 10.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
-        label(904, 616, "C3 = THE SAMPLE'S OWN PITCH", 8.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-        label(904, 636, "MIDI CH 2-5 = T1-T4, 6 VOICES", 8.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        label(904, 594, (std::string("KEYS + MIDI CH 1 PLAY ") + nb).c_str(), 10.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
+        button(keyChordBtn(), (std::string("CHORD: ") + kChords[keyChord % kChordCount].name).c_str(), keyChord != 0, 9.5f);
+        button(latchBtn(), "LATCH", keyLatch, 10.f);
+        button(pcKeysBtn(), pcKeys ? "PC KEYS: ON (A W S E D F...)" : "PC KEYS: OFF", pcKeys, 9.5f);
         button(notesOffBtn(), "ALL NOTES OFF", false, 10.f);
     }
     // ------------------------------------------------------------------ presets (factory + user files)
@@ -1534,6 +1697,7 @@ protected:
         if (matBtn().in(x, y)) return "Built-in materials to play without your own samples, or LIVE: the audio input, granulated as it comes. Click = next, right-click = previous (SAMPLE = your file).";
         if (captureBtn().in(x, y)) return "CAPTURE: the last bars of the input (see CAPTURE at the top) become this track's sample, sliced and saved with the project.";
         if (modeBtn().in(x, y)) return std::string(kModeHelp[bank->kit[selTrack].mode % kGrainModes]) + ". Click = next mode, right-click = previous.";
+        if (zoomBtn2().in(x, y)) return "ZOOM: the display shows START to END, so every grain is visible; off = the whole sample.";
         if (syncBtn().in(x, y)) return "SYNC: SIZE in note values (1/64 to 2 bars); in CLOUD, regular grains fall on the tempo grid.";
         if (legatoBtn().in(x, y)) return "LEGATO: a single-note step does not start the sound again, it changes the playing note (pitch, locks, length).";
         if (inBox().in(x, y)) return "Input level. KGRN-4 hears a track routed to its side-chain input (LIVE tracks, CAPTURE).";
@@ -1623,10 +1787,16 @@ protected:
     }
     void setTrackLen(int n) { pat().len[selTrack] = (uint8_t)clampi(n, 1, kSteps); sendTrackSettings(selTrack); stepPg = std::min(stepPg, (pat().len[selTrack] - 1) / 16); repaint(); }
     void showPatMsg(const std::string& m) { patMsg = m; patMsgUntil = nowSec() + 2.0; repaint(); }
-    void selectTrack(int t) { if (keyHeld >= 0) { keyNote(selTrack, keyHeld, false); keyHeld = -1; } selTrack = t; if (lockTrack != t) lockStep = -1; noteStep = -1; repaint(); }
+    void selectTrack(int t)
+    {
+        if (t != selTrack) releaseAllKeys();
+        selTrack = t; if (lockTrack != t) lockStep = -1; noteStep = -1;
+        char b[16]; std::snprintf(b, sizeof(b), "sel %d", t); setState("cmd", b);   // MIDI channel 1 follows the selection
+        repaint();
+    }
     void setFill(bool on) { if (fillHeld == on) return; fillHeld = on; sendCmd(on ? "fill 1" : "fill 0"); repaint(); }
     // the waveform: drag S / E (START / END), click = slice + POSITION
-    float waveFrac(float x) const { const R wr = waveR(); return clampf((x - wr.x - 4) / (wr.w - 8), 0.f, 1.f); }
+    float waveFrac(float x) const { const R wr = waveR(); return clampf(vA + (x - wr.x - 4) / (wr.w - 8) * (vB - vA), 0.f, 1.f); }
     void waveSet(float x)
     {
         const int t = selTrack;
@@ -1647,10 +1817,11 @@ protected:
     }
     void waveDown(float x)
     {
+        updateView();
         const int t = selTrack;
         const R wr = waveR(); const float cols = wr.w - 8;
         double a, e, p; playRegion(a, e, p);
-        const float xa = wr.x + 4 + (float)a * cols, xe = wr.x + 4 + (float)e * cols;
+        const float xa = fx((float)a), xe = fx((float)e); (void)cols;
         waveHandle = std::fabs(x - xa) < 8.f && std::fabs(x - xa) <= std::fabs(x - xe) ? 1 : (std::fabs(x - xe) < 8.f ? 2 : 0);
         if (waveHandle == 0 && !liveTrack(t)) {               // a click outside the slice picks the slice under the mouse
             const SampleData* s = srcOf(t);
@@ -1701,6 +1872,18 @@ protected:
             if (ev.key == 'y' || ev.key == 'Y') { redo(); return true; }
         }
         if (ev.press && ev.key == kKeyEscape) { if (overlay != ovNone) overlay = ovNone; else { lockStep = -1; noteStep = -1; } repaint(); return true; }
+        if (pcKeys && overlay == ovNone && !(ev.mod & (kModifierControl | kModifierSuper | kModifierAlt))) {
+            static const char* row = "awsedftgyhujkolp;";          // C D E F G A B C D E... as a piano, from the keyboard's 2nd octave
+            uint k = ev.key; if (k >= 'A' && k <= 'Z') k += 32;
+            if (k == 'z' || k == 'x') { if (ev.press) { kbOct = clampi(kbOct + (k == 'x' ? 1 : -1), -1, 6); repaint(); } return true; }
+            const char* f = k < 128 ? std::strchr(row, (int)k) : nullptr;
+            if (f && k) {
+                const int n = clampi(kbLow() + 12 + (int)(f - row), 0, 127);
+                if (ev.press && !pcDown[n]) { pcDown[n] = true; keyPress(n); }
+                else if (!ev.press && pcDown[n]) { pcDown[n] = false; keyRelease(n); }
+                return true;
+            }
+        }
         return false;
     }
 
@@ -1715,7 +1898,7 @@ protected:
             if (drag == dkTempo) editParameter(kGlobalBase + gTEMPO, false);
             if (drag == dkPatLen || drag == dkSwing) sendPatternSettings();
             if (drag == dkTrackLen) sendTrackSettings(selTrack);
-            if (drag == dkKey && keyHeld >= 0) { keyNote(selTrack, keyHeld, false); keyHeld = -1; }
+            if (drag == dkKey && mouseKey >= 0) { keyRelease(mouseKey); mouseKey = -1; }
             if (drag == dkFill && !fillLatch) setFill(false);
             if (drag == dkResize) saveView();
             if (drag != dkNone) { drag = dkNone; repaint(); }
@@ -1755,6 +1938,7 @@ protected:
         }
         // display
         if (lockMode() && lockClearBtn().in(x, y)) { char b[40]; std::snprintf(b, sizeof(b), "kc %d %d %d", editPattern(), lockTrack, lockStep); sendCmd(b); repaint(); return true; }
+        if (zoomBtn2().in(x, y) && !liveTrack(selTrack)) { zoom = !zoom; repaint(); return true; }
         if (waveR().in(x, y)) { waveDown(x); drag = dkWave; repaint(); return true; }
         if (loadBtn().in(x, y)) { openSampleBrowser(); return true; }
         if (matBtn().in(x, y)) { setMaterial(selTrack, (bank->kit[selTrack].material + (right ? kMatLive : 1)) % (kMatLive + 1)); return true; }
@@ -1855,13 +2039,15 @@ protected:
         // keyboard
         if (octDown().in(x, y)) { kbOct = std::max(-1, kbOct - 1); repaint(); return true; }
         if (octUp().in(x, y)) { kbOct = std::min(6, kbOct + 1); repaint(); return true; }
-        if (notesOffBtn().in(x, y)) { setState("cmd", "panic"); return true; }
+        if (notesOffBtn().in(x, y)) { latched.clear(); setState("cmd", "panic"); repaint(); return true; }
+        if (keyChordBtn().in(x, y)) { keyChord = dbl ? 0 : (keyChord + (right ? kChordCount - 1 : 1)) % kChordCount; repaint(); return true; }
+        if (latchBtn().in(x, y)) { if (keyLatch) releaseAllKeys(); keyLatch = !keyLatch; repaint(); return true; }
+        if (pcKeysBtn().in(x, y)) { if (pcKeys) releaseAllKeys(); pcKeys = !pcKeys; repaint(); return true; }
         {
             const int n = keyAt(x, y);
             if (n >= 0) {
-                keyHeld = n; keyNote(selTrack, n, true); drag = dkKey;
-                if (lane == lnNote && noteStep >= 0 && noteStep < pat().len[selTrack]) setStepNote(noteStep, n);
-                repaint(); return true;
+                mouseKey = n; drag = dkKey; keyPress(n);
+                return true;
             }
         }
         return false;
@@ -1905,7 +2091,7 @@ protected:
         }
         case dkKey: {
             const int n = keyAt(x, y);
-            if (n >= 0 && n != keyHeld) { if (keyHeld >= 0) keyNote(selTrack, keyHeld, false); keyHeld = n; keyNote(selTrack, n, true); repaint(); }
+            if (n >= 0 && n != mouseKey && !keyLatch) { if (mouseKey >= 0) keyRelease(mouseKey); mouseKey = n; keyPress(n); }
             break;
         }
         case dkPaint:
@@ -1947,6 +2133,7 @@ protected:
     }
     void uiIdle() override
     {
+        if (!sentSel) { sentSel = true; char b[16]; std::snprintf(b, sizeof(b), "sel %d", selTrack); setState("cmd", b); }
         if (!tipShown && !tipNone && drag == dkNone && overlay == ovNone && hovX >= 0.f && nowSec() - hovSince > 0.8 && nowSec() > tipBlockUntil) {
             tipText = tipAt(hovX, hovY);
             if (!tipText.empty()) { tipShown = true; repaint(); } else tipNone = true;
@@ -1978,8 +2165,8 @@ private:
     GrainDirect* direct = nullptr;
     double lastLiveDraw = 0.0;
     int selTrack = 0, stepPg = 0, lockTrack = 0, lockStep = -1;
-    int page = 0, fxPage = 0, lane = 0, kbOct = 2, keyHeld = -1, noteStep = -1, waveHandle = 0;
-    bool fillHeld = false, fillLatch = false; double lastAnim = 0.0;
+    int page = 0, fxPage = 0, lane = 0, kbOct = 2, keyChord = 0, noteStep = -1, waveHandle = 0;
+    bool fillHeld = false, fillLatch = false, keyLatch = false, pcKeys = false, sentSel = false, zoom = true; double lastAnim = 0.0;
     Overlay overlay = ovNone;
     DragKind drag = dkNone; int dragIndex = 0; float dragY = 0, dragStart = 0; bool paintVal = true;
     uint lastClickTime = 0; float lastX = -100, lastY = -100;

@@ -20,7 +20,9 @@ played as grains by a step sequencer with per-step locks on every knob.
   swing, FILL, copy / paste, rotate.
 - Tempo-synced ping-pong echo (high / low cut, width) and a reverb (pre-delay, width) on sends; master chorus, drive,
   low / high cut and output.
-- MIDI: channel 1 C3-D#3 play tracks 1-4, B2 = FILL, C4-D#5 choose patterns; channels 2-5 play tracks 1-4 polyphonically.
+- MIDI: channel 1 plays the selected track, channels 2-5 tracks 1-4 (6 voices each, C3 = the sample's pitch); channel 16:
+  C3-D#3 trig tracks 1-4, B2 = FILL, C4-D#5 choose patterns. On-screen keyboard with CHORD, LATCH and PC KEYS.
+- The display draws every grain: where it reads, its window, pitch, pan and level, one colour per voice.
 - Follows the host transport (or plays on its own); 19 factory presets and your own (with your samples); undo; four
   skins; resizable window.
 

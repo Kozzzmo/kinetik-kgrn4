@@ -16,6 +16,14 @@ inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v
 static constexpr int kMaxSlices = 32;
 static constexpr uint8_t kNoLock = 255;
 
+// ---- what the display shows of the engine (GrainDirect::grainView)
+// a grain: the stretch of material it reads (a -> b, fractions of the material or of the LIVE window; b < a = backwards),
+// where it is in its life (ph 0..1), its level now (window x envelope), pan -1..1, pitch against the sample, voice slot
+enum { kGvReverse = 1, kGvOriginal = 2, kGvOctave = 4, kGvLoop = 8 };
+struct GrainView { float a, b, ph, amp, pan, semis; uint8_t voice, flags; };
+struct VoiceView { float head, env; int16_t note; uint8_t slot, released; };
+static constexpr int kViewGrains = 160;
+
 // ---- grain engine of a track (Kit::mode)
 enum GrainMode { gmClassic = 0, gmCloud, gmLoop, kGrainModes };
 static const char* const kModeNames[kGrainModes] = {"CLASSIC", "CLOUD", "LOOP"};

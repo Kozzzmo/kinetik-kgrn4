@@ -31,9 +31,9 @@ inline std::string kitLines(const Bank& b, int t)
 // the kit of a new instance (and of Init): four built-in materials, sliced at their transients
 inline void defaultKits(Bank& b)
 {
-    // PAD as a cloud, KEYS as a grain synth (CLASSIC, LEGATO), BEAT in loops on the 16ths, BELLS as a grain rain
+    // PAD as a cloud, KEYS as a grain synth (CLASSIC), BEAT in loops on the 16ths, BELLS as a grain rain
     static const int defMat[kTracks] = {1, 8, 6, 2}, defMode[kTracks] = {gmCloud, gmClassic, gmLoop, gmCloud};
-    static const uint8_t defSync[kTracks] = {0, 0, 1, 0}, defLegato[kTracks] = {1, 1, 0, 0};
+    static const uint8_t defSync[kTracks] = {0, 0, 1, 0}, defLegato[kTracks] = {0, 0, 0, 0};
     for (int t = 0; t < kTracks; ++t) {
         Kit& k = b.kit[t]; k = Kit(); k.material = (uint8_t)defMat[t]; k.mode = (uint8_t)defMode[t]; k.sync = defSync[t]; k.legato = defLegato[t];
         sliceKit(k, material(defMat[t]).get());

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1
+
+- Polyphony you can play: MIDI channel 1 now plays the selected track with 6 voices (channels 2-5 still play tracks 1-4;
+  track trigs, FILL and pattern selection moved to channel 16). The on-screen keyboard gets CHORD (a key plays a chord),
+  LATCH (keys stay down) and PC KEYS (play from the computer keyboard, Z / X = octave); the keys of every sounding voice
+  light up in its colour. New instances start without LEGATO.
+- Every grain is drawn: its window over the stretch of material it reads, at its pitch (chords and octaves become separate
+  bands), shifted by its pan, brightened by its window and the note's envelope, one colour per voice; outlines show
+  original-pitch grains (PITCH MIX) and octave grains, arrows reversed grains. SIZE, DENSITY, SHAPE, SPRAY, SPREAD,
+  REVERSE, OCTAVE, PITCH, PITCH MIX, JITTER, the envelopes and the LFOs can all be seen moving the grains. The counts are
+  shown under the display.
+- ZOOM: the display shows START to END (on by default).
+
 ## 0.4.0
 
 - Polyphony: 6 voices per track, each with its own envelope (ATTACK DECAY SUSTAIN RELEASE) and filter moved by FLT ENV;

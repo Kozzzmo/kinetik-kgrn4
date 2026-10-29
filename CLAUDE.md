@@ -103,3 +103,16 @@ CAPTURE of the last bars + LIVE material, free redesign of the knobs)
 - Presets: `PB::row` sets HOLD gates; helpers `chord`, `gate`, `ratch`, `cond`, `lfo`; 19 presets (Grain Chords added).
 - Tests: polyphony / stealing, START / END, PITCH MIX, LFO, LEN, RATCHET, conditions, SOLO, FLT ENV, effects extremes;
   CPU (16 voices of dense clouds) ~25 % of a core on this VM, limit 40 % (CI machines vary).
+
+## 0.4.1 (owner: "toujours pas de vraie polyphonie", "pousse la représentation de chaque grain", "affiche les effets des réglages")
+
+- MIDI: ch 1 = the UI's selected track (cmd `sel t`, `uiTrack`), ch 2-5 = tracks 1-4, ch 16 = C3-D#3 trigs / B2 FILL /
+  C4-D#5 patterns. Default kits without LEGATO (it made sequenced notes monophonic).
+- Engine: `Grain` keeps `p0 travel semis flags`; `writeView()` at the end of every block copies each track's grains
+  (`GrainView`, `kViewGrains` = 160) and voices (`VoiceView`) into `view[t]` under a seqlock; `grainView()` reads it
+  (GrainDirect). Structs and `kGv*` flags in `Params.hpp`.
+- UI: `drawGrains` (additive blending through the C functions `nvgGlobalCompositeBlendFunc` / `nvgGlobalCompositeOperation`
+  declared `extern "C"` at the top of KgrnUI.cpp): x = material read (`fx()` with ZOOM view `vA..vB`, `updateView`), y =
+  pitch (`pitchY`, auto range `pitchRange` 7..25 st) + pan x 6 px, window profile from SHAPE (`grainProfile`), colour per
+  voice slot (`voiceColor`, no pink, darker on light skins). Keyboard: `keyChord`, LATCH (`latched`), PC KEYS (`pcDown`,
+  row "awsedftgyhujkolp;", Z / X octave), voice keys lit. Test: grain view counts / chord pitches.

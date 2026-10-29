@@ -24,6 +24,7 @@ public:
     SamplePtr captureInput(int bars) override { return engine->capture(bars); }
     void liveWave(float* mn, float* mx, int cols) override { engine->liveWave(mn, mx, cols); }
     int voiceHeads(int t, float* out, int max) override { return engine->voiceHeads(t, out, max); }
+    int grainView(int t, GrainView* out, int max, VoiceView* vout, int vmax, int& nv) override { return engine->grainView(t, out, max, vout, vmax, nv); }
     float lfoValue(int t, int i) override { return t >= 0 && t < kTracks && i >= 0 && i < kLfos ? engine->lfoValue(t, i) : 0.f; }
 
     KgrnPlugin()
@@ -208,6 +209,7 @@ protected:
                 line.assign(s, len);
                 if (line.rfind("pv ", 0) == 0) { unsigned i = 0; float v = 0.f; if (std::sscanf(line.c_str() + 3, "%u %f", &i, &v) == 2) uiEdit(i, v); }
                 else if (line == "panic") panic.store(true);
+                else if (line.rfind("sel ", 0) == 0) uiTrack.store(clampi(std::atoi(line.c_str() + 4), 0, kTracks - 1));
                 else if (line == "lic") licensed.store(lic::findInstalled(kProductCode).valid);
                 else if (line.rfind("trig ", 0) == 0 || line.rfind("rel ", 0) == 0) {   // on-screen keyboard: trig <track> <note> / rel <track> <note>
                     const bool on = line[0] == 't';
@@ -268,8 +270,8 @@ protected:
             }
         }
         if (srcChanged) updateSources();
-        // live notes: the UI keyboard, MIDI channel 1 C3..D#3 = tracks 1-4, B2 = FILL (C4..D#5 = patterns A01-A16),
-        // channels 2-5 = tracks 1-4 played chromatically and polyphonically (C3 = the sample's own pitch)
+        // live notes: the UI keyboard; MIDI channel 1 = the selected track, channels 2-5 = tracks 1-4 (polyphonic,
+        // C3 = the sample's own pitch); channel 16 = C3..D#3 trig tracks 1-4, B2 = FILL, C4..D#5 = patterns A01-A16
         notes.clear();
         while (keyR.load() != keyW.load() && notes.size() < 256) {
             const int r = keyR.load(); const uint32_t k = keyQ[r]; keyR.store((r + 1) % 32);
@@ -282,14 +284,15 @@ protected:
             if (st == 0xB0 && (note == 123 || note == 120)) { engine->allNotesOff(); continue; }   // all notes / sound off
             const bool on = st == 0x90 && ev.data[2] > 0, off = st == 0x80 || (st == 0x90 && ev.data[2] == 0);
             if (!on && !off) continue;
-            if (ch == 0) {
+            if (ch == 15) {                                               // channel 16: the remote (track trigs, FILL, patterns)
                 if (note >= 60 && note < 60 + kTracks) notes.push_back({ev.frame, note - 60, kBaseNote, on ? ev.data[2] / 127.f : 0.f, on});
                 else if (note == 59) midiFill = on;                       // B2 held = FILL
                 else if (on && note >= 72 && note < 72 + kPatterns) engine->midiPattern = note - 72;
-            } else if (ch >= 1 && ch <= kTracks)                          // polyphonic: C3 = the sample's own pitch
+            } else if (ch == 0)                                           // channel 1: the selected track, polyphonic
+                notes.push_back({ev.frame, uiTrack.load(std::memory_order_relaxed), note, on ? ev.data[2] / 127.f : 0.f, on});
+            else if (ch <= kTracks)                                       // channels 2-5: tracks 1-4 (C3 = the sample's own pitch)
                 notes.push_back({ev.frame, ch - 1, note, on ? ev.data[2] / 127.f : 0.f, on});
         }
-        if (panic.exchange(false)) engine->allNotesOff();
         engine->fill = midiFill || fillUi.load(std::memory_order_relaxed);
         if (engine->midiPattern >= 0 && (int)std::lround(engine->global[gPATTERN]) == engine->midiPattern) engine->midiPattern = -1;
         Transport tp;
@@ -330,6 +333,7 @@ private:
     std::atomic<bool> smpDirty{false};
     uint32_t keyQ[32] = {}; std::atomic<int> keyW{0}, keyR{0};
     std::atomic<bool> fillUi{false}, panic{false}; bool midiFill = false;
+    std::atomic<int> uiTrack{0};                     // the track selected in the UI: MIDI channel 1 plays it
     std::vector<NoteIn> notes;
     uint64_t demoPos = 0; float demoGain = 1.f;
     static constexpr const char* kProductCode = "KGRN-4";

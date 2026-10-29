@@ -12,6 +12,7 @@
 #include <climits>
 #include <cstring>
 #include <vector>
+#include <atomic>
 #if defined(__SSE__) || defined(_M_X64) || defined(__x86_64__)
 #include <xmmintrin.h>
 #endif
@@ -312,10 +313,28 @@ public:
             if (best >= 0.f) act |= 1u << t;
         }
         outActive = act; outPattern = curPattern;
+        writeView();
         wasPlaying = playing; prevB1 = b1;
         if (playing && usingInternal) internalBeat = b1;
     }
 
+    // what the display shows: every grain and every voice of a track, copied at the end of each block (seqlock)
+    int grainView(int t, GrainView* out, int max, VoiceView* vout, int vmax, int& nv) const
+    {
+        nv = 0;
+        if (t < 0 || t >= kTracks) return 0;
+        const ViewSnap& V = view[t];
+        for (int tries = 0; tries < 4; ++tries) {
+            const uint32_t a = V.seq.load(std::memory_order_acquire);
+            if (a & 1u) continue;
+            const int n = std::min(max, V.ng), m = std::min(vmax, V.nv);
+            std::memcpy(out, V.g, sizeof(GrainView) * (size_t)n);
+            std::memcpy(vout, V.v, sizeof(VoiceView) * (size_t)m);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (V.seq.load(std::memory_order_relaxed) == a) { nv = m; return n; }
+        }
+        return 0;
+    }
     int activeGrains(int t) const { int n = 0; for (auto& v : tr[t].v) if (v.active) n += v.ng; return n; }   // tests
     int activeVoices(int t) const { int n = 0; for (auto& v : tr[t].v) if (v.active && v.stage < 3) ++n; return n; }
     void spawnStats(int t, int& all, int& rev2, int& oct) const { all = tr[t].nSpawn; rev2 = tr[t].nRev; oct = tr[t].nOct; }
@@ -355,7 +374,8 @@ private:
         double lo() const { return ring ? (double)std::max<int64_t>(0, W - n[0] + 4096) : 1.0; }    // oldest safe position (level 0 frames)
         double hi() const { return ring ? (double)W - 256.0 : (double)n[0] - 3.0; }                 // newest safe position
     };
-    struct Grain { double pos, inc; float ph, dph, gl, gr, offR; int8_t wa; float wf, xf; int8_t lvl; };
+    struct Grain { double pos, inc; float ph, dph, gl, gr, offR; int8_t wa; float wf, xf; int8_t lvl;
+                   double p0, travel; float semis; uint8_t flags; };   // display: start, travel (level-0 frames), pitch, kGv* flags
     // streaming half-band decimator (the input ring's levels): output j is centred on input 2j - 22
     struct Dec2 {
         float x[47] = {}; int w = 0, ph = 0;
@@ -415,6 +435,38 @@ private:
         int nSpawn = 0, nRev = 0, nOct = 0;            // tests
     };
     static constexpr uint32_t kSeg = 16;
+    struct ViewSnap { std::atomic<uint32_t> seq{0}; int ng = 0, nv = 0; GrainView g[kViewGrains]; VoiceView v[kSlots]; };
+    ViewSnap view[kTracks];
+    void writeView()
+    {
+        for (int t = 0; t < kTracks; ++t) {
+            TrackState& T = tr[t];
+            ViewSnap& V = view[t];
+            V.seq.fetch_add(1, std::memory_order_acq_rel);
+            int ng = 0, nv = 0;
+            if (T.busy && hasSource(t)) {
+                const bool live = isLive(t);
+                const double winLen = live ? liveWindow() : 1.0, base = live ? (double)liveW - winLen : 0.0;
+                const double inv = live ? 1.0 / winLen : 1.0 / (double)std::max<int64_t>(1, T.src.n[0]);
+                auto frac = [&](double x) { return (float)((x - base) * inv); };
+                for (int s = 0; s < kSlots; ++s) {
+                    const Voice& v = T.v[s];
+                    if (!v.active) continue;
+                    if (nv < kSlots) V.v[nv++] = {(float)v.headFrac, v.env * v.vel, (int16_t)v.note, (uint8_t)s, (uint8_t)(v.stage >= 2)};
+                    const float a = v.env * v.vel * v.normInv;
+                    for (int i = 0; i < v.ng && ng < kViewGrains; ++i) {
+                        const Grain& g = v.g[i];
+                        const float w = window(g);
+                        const float sum = g.gl + g.gr;
+                        V.g[ng++] = {frac(g.p0), frac(g.p0 + g.travel), clampf(g.ph, 0.f, 1.f), w * a,
+                                     sum > 1e-6f ? (g.gr - g.gl) / sum : 0.f, g.semis, (uint8_t)s, g.flags};
+                    }
+                }
+            }
+            V.ng = ng; V.nv = nv;
+            V.seq.fetch_add(1, std::memory_order_release);
+        }
+    }
     float sr = 48000.f; double curBpm = 120.0, spb = 24000.0, freeBeat = 0.0;
     TrackState tr[kTracks];
     GrainWindows win;
@@ -751,6 +803,9 @@ private:
         if (v.jitter > 0.f && !loop) amp -= 0.5f * v.jitter * rng.uni();
         g.gl = v.panL * pl * 1.414f * amp; g.gr = v.panR * pR * 1.414f * amp;
         g.offR = (float)(v.spread * 0.004 * S.sr * rng.next() * sc);
+        g.p0 = p; g.travel = len * inc;
+        g.semis = (float)(12.0 * std::log2(std::max(1e-6, std::fabs(inc) / std::max(1e-9, v.origInc))));
+        g.flags = (uint8_t)((inc < 0.0 ? kGvReverse : 0) | (!pitched ? kGvOriginal : 0) | (std::fabs(semis) >= 11.f ? kGvOctave : 0) | (loop ? kGvLoop : 0));
     }
 
     inline float window(const Grain& g) const
