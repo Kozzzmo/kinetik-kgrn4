@@ -59,7 +59,15 @@ struct PB {
     }
     static float sliceKnobOf(PB& b, int t, int s) { return sliceKnob(s, b.slices(t)); }
     int slices(int t) const { return b.kit[t].nSlices; }
-    void tp(int t, std::initializer_list<std::pair<int, float>> kv) { for (auto& p : kv) v[tpIndex(t, p.first)] = p.second; }
+    // kOldFilter: the bipolar FILTER the presets were voiced with (left = low pass, right = high pass) -> TYPE + CUTOFF
+    static constexpr int kOldFilter = 1000;
+    void tp(int t, std::initializer_list<std::pair<int, float>> kv)
+    {
+        for (auto& p : kv) {
+            if (p.first == kOldFilter) { int ty, cu; convertFilter05((int)std::lround(p.second), ty, cu); v[tpIndex(t, tpFTYPE)] = (float)ty; v[tpIndex(t, tpCUTOFF)] = (float)cu; }
+            else v[tpIndex(t, p.first)] = p.second;
+        }
+    }
     void glob(std::initializer_list<std::pair<int, float>> kv) { for (auto& p : kv) v[kGlobalBase + p.first] = p.second; }
     // steps of pattern 0: 'x' = trig, anything else = rest; the string length sets the track length
     void row(int t, const char* s, int speed = 0)
@@ -118,14 +126,14 @@ static void pDissolvingStrings(PB& b)
     b.length(32);
     b.glob({{gREV_SIZE, 110}, {gREV_DAMP, 47}, {gTEMPO, 76}});
     b.lfo(0, 0, 1, 18, false, 18, tpPOSITION);                   // the pad drifts slowly through its chords
-    b.lfo(1, 0, 0, 1, true, -20, tpFILTER);
+    b.lfo(1, 0, 0, 1, true, -20, tpCUTOFF);
 }
 
 static void pChoirFog(PB& b)
 {
     b.mat(0, 3); b.mode(0, gmCloud); b.legato(0);
     b.tp(0, {{tpPOSITION, 30}, {tpSCAN, 70}, {tpSPRAY, 70}, {tpSIZE, 96}, {tpDENSITY, 116}, {tpJITTER, 25}, {tpREVERSE, 45}, {tpSPREAD, 120},
-             {tpATTACK, 100}, {tpFILTER, 60}, {tpVOLUME, 100}, {tpREVERB, 90}});
+             {tpATTACK, 100}, {PB::kOldFilter, 60}, {tpVOLUME, 100}, {tpREVERB, 90}});
     b.row(0, "x...............................................................");
     b.lock(0, 32, tpPOSITION, 90);
     b.mat(1, 7); b.mode(1, gmClassic);
@@ -135,7 +143,7 @@ static void pChoirFog(PB& b)
     b.mute(2); b.mute(3);
     b.length(64);
     b.glob({{gREV_SIZE, 118}, {gREV_DAMP, 61}, {gTEMPO, 70}});
-    b.lfo(0, 0, 0, 1, true, -22, tpFILTER); b.lfo(0, 1, 1, 30, false, 25, tpSPRAY);
+    b.lfo(0, 0, 0, 1, true, -22, tpCUTOFF); b.lfo(0, 1, 1, 30, false, 25, tpSPRAY);
 }
 
 static void pFrozenDrone(PB& b)
@@ -146,7 +154,7 @@ static void pFrozenDrone(PB& b)
     b.row(0, "x...............................................................");
     b.lock(0, 32, tpPOSITION, 20);
     b.mat(1, 4); b.mode(1, gmCloud);
-    b.tp(1, {{tpPOSITION, 40}, {tpSCAN, 72}, {tpSPRAY, 100}, {tpSIZE, 60}, {tpDENSITY, 104}, {tpSPREAD, 127}, {tpFILTER, 84},
+    b.tp(1, {{tpPOSITION, 40}, {tpSCAN, 72}, {tpSPRAY, 100}, {tpSIZE, 60}, {tpDENSITY, 104}, {tpSPREAD, 127}, {PB::kOldFilter, 84},
              {tpATTACK, 90}, {tpVOLUME, 64}, {tpREVERB, 70}});
     b.row(1, "x...............................................................");
     b.mute(2); b.mute(3);
@@ -159,7 +167,7 @@ static void pShimmerFreeze(PB& b)
 {
     b.mat(0, 1); b.mode(0, gmClassic); b.legato(0);
     b.tp(0, {{tpSCAN, 64}, {tpPOSITION, 70}, {tpSIZE, 108}, {tpDENSITY, 127}, {tpSPRAY, 60}, {tpOCTAVE, 45}, {tpJITTER, 18}, {tpSPREAD, 120},
-             {tpATTACK, 100}, {tpFILTER, 74}, {tpREVERB, 110}, {tpVOLUME, 84}});
+             {tpATTACK, 100}, {PB::kOldFilter, 74}, {tpREVERB, 110}, {tpVOLUME, 84}});
     b.row(0, "x...............................");
     b.mat(1, 3); b.mode(1, gmCloud);
     b.tp(1, {{tpSCAN, 64}, {tpPOSITION, 50}, {tpSIZE, 90}, {tpDENSITY, 116}, {tpSPRAY, 80}, {tpOCTAVE, 55}, {tpSPREAD, 125}, {tpPITCH, 64 + 32},
@@ -179,7 +187,7 @@ static void pBellRain(PB& b)
     b.row(0, "x.......x.......x.......x.......");
     b.pitchLock(0, 8, 3); b.pitchLock(0, 16, -2); b.pitchLock(0, 24, 5);
     b.mat(1, 1); b.mode(1, gmCloud); b.legato(1);
-    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpJITTER, 20}, {tpSPREAD, 110}, {tpFILTER, 56},
+    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpJITTER, 20}, {tpSPREAD, 110}, {PB::kOldFilter, 56},
              {tpATTACK, 100}, {tpVOLUME, 72}, {tpREVERB, 80}});
     b.row(1, "x...............................");
     b.mute(2); b.mute(3);
@@ -200,7 +208,7 @@ static void pRainWindow(PB& b)
     b.row(1, "x...x...x...x...x...x...x...x...");
     b.lock(1, 8, tpPOSITION, 90); b.lock(1, 20, tpPOSITION, 60);
     b.mat(2, 1); b.mode(2, gmClassic); b.legato(2);
-    b.tp(2, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 100}, {tpSPRAY, 40}, {tpSPREAD, 110}, {tpFILTER, 50}, {tpATTACK, 100}, {tpVOLUME, 62}, {tpREVERB, 80}});
+    b.tp(2, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 100}, {tpSPRAY, 40}, {tpSPREAD, 110}, {PB::kOldFilter, 50}, {tpATTACK, 100}, {tpVOLUME, 62}, {tpREVERB, 80}});
     b.row(2, "x...............................");
     b.mute(3);
     b.length(32);
@@ -215,7 +223,7 @@ static void pMusicBoxDust(PB& b)
     b.row(0, "x...............x...............");
     b.lock(0, 16, tpPOSITION, 64);
     b.mat(1, 8); b.mode(1, gmClassic); b.legato(1);
-    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 96}, {tpDENSITY, 90}, {tpSPRAY, 30}, {tpSPREAD, 90}, {tpFILTER, 54}, {tpATTACK, 90}, {tpVOLUME, 74}, {tpREVERB, 70}});
+    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 96}, {tpDENSITY, 90}, {tpSPRAY, 30}, {tpSPREAD, 90}, {PB::kOldFilter, 54}, {tpATTACK, 90}, {tpVOLUME, 74}, {tpREVERB, 70}});
     b.row(1, "x.......x.......x.......x.......");
     for (int s = 0; s < 4; ++s) b.lock(1, s * 8, tpPOSITION, (float)(8 + s * 32));
     b.mute(2); b.mute(3);
@@ -231,7 +239,7 @@ static void pParticleKeys(PB& b)
     b.row(0, "x.......x.......x.......x.......");
     for (int s = 0; s < 4; ++s) b.lock(0, s * 8, tpPOSITION, (float)(8 + s * 32));
     b.mat(1, 7); b.mode(1, gmClassic); b.legato(1);
-    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 104}, {tpDENSITY, 80}, {tpSPREAD, 80}, {tpPITCH, 64 - 32}, {tpFILTER, 50}, {tpATTACK, 100}, {tpVOLUME, 70}, {tpREVERB, 50}});
+    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 104}, {tpDENSITY, 80}, {tpSPREAD, 80}, {tpPITCH, 64 - 32}, {PB::kOldFilter, 50}, {tpATTACK, 100}, {tpVOLUME, 70}, {tpREVERB, 50}});
     b.row(1, "x.......x.......x.......x.......");
     b.pitchLock(1, 8, 5); b.pitchLock(1, 16, -4); b.pitchLock(1, 24, -5);
     b.mute(2); b.mute(3);
@@ -271,7 +279,7 @@ static void pStutterSlices(PB& b)
     b.lock(0, 13, tpDENSITY, 127); b.lock(0, 13, tpJITTER, 60);
     b.pitchLock(0, 15, 12);
     b.mat(1, 8); b.mode(1, gmLoop, true);
-    b.tp(1, {{tpSCAN, 64}, {tpSIZE, PB::syncSize(4)}, {tpSHAPE, 14}, {tpSPREAD, 80}, {tpDECAY, 50}, {tpSUSTAIN, 0}, {tpFILTER, 80}, {tpVOLUME, 76}, {tpDELAY, 50}, {tpREVERB, 30}});
+    b.tp(1, {{tpSCAN, 64}, {tpSIZE, PB::syncSize(4)}, {tpSHAPE, 14}, {tpSPREAD, 80}, {tpDECAY, 50}, {tpSUSTAIN, 0}, {PB::kOldFilter, 80}, {tpVOLUME, 76}, {tpDELAY, 50}, {tpREVERB, 30}});
     b.row(1, "..x...x...x..x.x");
     b.lock(1, 6, tpPOSITION, 32); b.lock(1, 10, tpPOSITION, 64); b.lock(1, 13, tpPOSITION, 96); b.lock(1, 15, tpREVERSE, 127);
     b.mute(2); b.mute(3);
@@ -310,7 +318,7 @@ static void pBrokenArp(PB& b)
     b.tp(1, {{tpSCAN, 96}, {tpSIZE, PB::syncSize(6)}, {tpSHAPE, 6}, {tpSPREAD, 15}, {tpVOLUME, 76}, {tpREVERB, 10}});
     b.row(1, "x.......x.......");
     b.mat(2, 7); b.mode(2, gmClassic); b.legato(2);
-    b.tp(2, {{tpSCAN, 66}, {tpSIZE, 104}, {tpDENSITY, 90}, {tpSPREAD, 90}, {tpPITCH, 64 - 32}, {tpFILTER, 54}, {tpATTACK, 90}, {tpVOLUME, 66}, {tpREVERB, 50}});
+    b.tp(2, {{tpSCAN, 66}, {tpSIZE, 104}, {tpDENSITY, 90}, {tpSPREAD, 90}, {tpPITCH, 64 - 32}, {PB::kOldFilter, 54}, {tpATTACK, 90}, {tpVOLUME, 66}, {tpREVERB, 50}});
     b.row(2, "x...............................");
     b.pitchLock(2, 16, -4);
     b.length(32);
@@ -328,7 +336,7 @@ static void pGrainKeys(PB& b)
     b.row(0, "x...............x...............x...............x...............");
     for (int s = 0; s < 4; ++s) b.lock(0, s * 16, tpPOSITION, (float)(6 + s * 32));
     b.mat(1, 7); b.mode(1, gmClassic); b.legato(1);
-    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 100}, {tpDENSITY, 90}, {tpSPREAD, 80}, {tpPITCH, 64 - 32}, {tpFILTER, 52}, {tpATTACK, 90}, {tpVOLUME, 70}, {tpREVERB, 40}});
+    b.tp(1, {{tpSCAN, 66}, {tpSIZE, 100}, {tpDENSITY, 90}, {tpSPREAD, 80}, {tpPITCH, 64 - 32}, {PB::kOldFilter, 52}, {tpATTACK, 90}, {tpVOLUME, 70}, {tpREVERB, 40}});
     b.row(1, "x...............x...............x...............x...............");
     b.pitchLock(1, 16, 5); b.pitchLock(1, 32, -4); b.pitchLock(1, 48, -5);
     b.mat(2, 2); b.mode(2, gmCloud);
@@ -350,7 +358,7 @@ static void pChoirChords(PB& b)
     b.lock(0, 32, tpPOSITION, 20); b.pitchLock(0, 32, 5);
     b.lock(0, 48, tpPOSITION, 90);
     b.mat(1, 1); b.mode(1, gmCloud); b.legato(1);
-    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpSPREAD, 120}, {tpFILTER, 56}, {tpATTACK, 100}, {tpVOLUME, 64}, {tpREVERB, 80}});
+    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpSPREAD, 120}, {PB::kOldFilter, 56}, {tpATTACK, 100}, {tpVOLUME, 64}, {tpREVERB, 80}});
     b.row(1, "x...............................................................");
     b.mute(2); b.mute(3);
     b.length(64);
@@ -367,11 +375,11 @@ static void pPluckLines(PB& b)
     static const int mel[32] = {0, 0, 0, 3, 0, 0, 7, 0, 5, 0, 0, 3, 0, 2, 0, 0, 0, 0, 0, 3, 0, 0, 10, 0, 8, 0, 7, 5, 0, 3, 0, 0};
     for (int s = 0; s < 32; ++s) if (mel[s]) b.pitchLock(0, s, mel[s]);
     b.mat(1, 1); b.mode(1, gmCloud); b.legato(1);
-    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpSPREAD, 120}, {tpFILTER, 58}, {tpATTACK, 100}, {tpVOLUME, 66}, {tpREVERB, 80}});
+    b.tp(1, {{tpSCAN, 68}, {tpSIZE, 100}, {tpDENSITY, 110}, {tpSPRAY, 60}, {tpSPREAD, 120}, {PB::kOldFilter, 58}, {tpATTACK, 100}, {tpVOLUME, 66}, {tpREVERB, 80}});
     b.row(1, "x...............x...............");
     b.lock(1, 16, tpPOSITION, 100);
     b.mat(2, 6); b.mode(2, gmLoop, true);
-    b.tp(2, {{tpSCAN, 96}, {tpSIZE, PB::syncSize(4)}, {tpSHAPE, 6}, {tpFILTER, 86}, {tpSPREAD, 30}, {tpVOLUME, 70}, {tpREVERB, 20}});
+    b.tp(2, {{tpSCAN, 96}, {tpSIZE, PB::syncSize(4)}, {tpSHAPE, 6}, {PB::kOldFilter, 86}, {tpSPREAD, 30}, {tpVOLUME, 70}, {tpREVERB, 20}});
     b.row(2, "x...x...x...x...");
     b.mute(3);
     b.length(32);
@@ -401,7 +409,7 @@ static void pGrainChords(PB& b)
 {
     b.mat(0, 5); b.mode(0, gmClassic);
     b.tp(0, {{tpSLICE, PB::sliceKnobOf(b, 0, 0)}, {tpEND, 70}, {tpPOSITION, 10}, {tpSCAN, 64}, {tpSIZE, 88}, {tpDENSITY, 110}, {tpSPRAY, 18}, {tpJITTER, 22},
-             {tpSPREAD, 115}, {tpATTACK, 70}, {tpDECAY, 90}, {tpSUSTAIN, 100}, {tpRELEASE, 85}, {tpFILTER, 50}, {tpFLTENV, 96}, {tpVOLUME, 90},
+             {tpSPREAD, 115}, {tpATTACK, 70}, {tpDECAY, 90}, {tpSUSTAIN, 100}, {tpRELEASE, 85}, {PB::kOldFilter, 50}, {tpFLTENV, 96}, {tpFATK, 90}, {tpFDEC, 105}, {tpVOLUME, 90},
              {tpDELAY, 25}, {tpREVERB, 75}});
     b.row(0, "x...............x...............x...............x...............");
     b.chord(0, 0, 5, 0); b.chord(0, 16, 4, -4); b.chord(0, 32, 5, 5); b.chord(0, 48, 5, -5);   // Cm7 Abmaj7 Fm7 Gm7

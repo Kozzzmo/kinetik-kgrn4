@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+- Knob pages: SOURCE, GRAIN, NOTES, AMP, FILTER, FX, ARP, LFO 1-3, drawn as tabs (distinct from the buttons above them).
+- FILTER page: TYPE (low pass 24 / 12 dB, band pass, high pass 12 / 24 dB, notch), CUTOFF, RESO, its own envelope (ENV
+  AMT, ENV ATK, ENV DEC), KEY TRK and LOW CUT.
+- NOTES page: the grains play in a scale chosen per track (SCALE / ROOT, or GLOBAL = the bottom bar). NOTES sets how
+  many grains take other notes of the scale, RANGE how far (1-4 octaves), ORDER how (RANDOM, AROUND, UP, DOWN,
+  PING-PONG, CHORD), EVERY how many grains share a note.
+- ARP page: an arpeggiator per track on held keys / MIDI and on the sequencer's chords: 11 modes (UP, DOWN, UP-DOWN,
+  DOWN-UP, RANDOM, AS PLAYED, CHORD, CONVERGE, DIVERGE, PINKY, THUMB), RATE, OCTAVES, GATE, LENGTH, SWING, REPEAT, LATCH.
+- MIX (sample / grains) has its own fader beside the display; RESET and the new RESET TRACK put it at 50 / 50.
+- The mouse wheel on a step: note; SHIFT = length; CTRL / CMD = octave; ALT = ratchet; CTRL + SHIFT = chord; ALT + SHIFT
+  = condition.
+- AMP page: VELOCITY (how much the velocity changes the level). The MATERIAL button shows the sample's name. UNDO in red.
+- Banks and presets of 0.5 / 0.6 are converted (the old bipolar FILTER becomes TYPE + CUTOFF).
+
 ## 0.6.0
 
 - LOOP SYNC per track: a loaded loop plays in time at the tempo (time stretched by the grains, the pitch stays). The

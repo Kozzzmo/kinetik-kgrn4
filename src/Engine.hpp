@@ -116,13 +116,18 @@ public:
     }
 
     // a note now (UI keyboard / MIDI): no locks, ends with noteOff
-    void noteOn(int t, int note, float vel) { if (t >= 0 && t < kTracks) startNote(t, nullptr, note, vel, true, -1.0); }
+    void noteOn(int t, int note, float vel)
+    {
+        if (t < 0 || t >= kTracks) return;
+        if (arpOn(t)) arpLiveOn(t, note, vel); else startNote(t, nullptr, note, vel, true, -1.0);
+    }
     void noteOff(int t, int note)
     {
         if (t < 0 || t >= kTracks) return;
+        arpLiveOff(t, note);
         for (auto& v : tr[t].v) if (v.active && v.live && v.note == note && v.stage < 2) v.stage = 2;
     }
-    void allNotesOff() { for (auto& T : tr) for (auto& v : T.v) if (v.active && v.stage < 2) v.stage = 2; }
+    void allNotesOff() { for (auto& T : tr) { T.arp.n = 0; T.arp.down = 0; for (auto& v : T.v) if (v.active && v.stage < 2) v.stage = 2; } }
 
     // ---- the input buffer (UI thread readers: they only look behind the write position)
     int64_t liveWritten() const { return liveW; }
@@ -219,7 +224,7 @@ public:
         }
         prevPlayParam = playParam;
         playingNow = playing;
-        if (wasPlaying && !playing) for (auto& T : tr) { T.ratLeft = 0; for (auto& v : T.v) if (v.active && !v.live && v.stage < 2) v.stage = 2; }   // stop: release
+        if (wasPlaying && !playing) for (auto& T : tr) { T.ratLeft = 0; arpDropSeq(T.arp); for (auto& v : T.v) if (v.active && !v.live && v.stage < 2) v.stage = 2; }   // stop: release
         if (restarted) { for (auto& T : tr) { T.lastK = INT64_MIN; T.k0 = INT64_MIN; } barW = -1; lastBar = INT64_MIN; }
         const double bpf = bpm / (60.0 * sr);
         const double b1 = b0 + bpf * frames;
@@ -298,7 +303,10 @@ public:
 
             // per track settings for this segment (LFOs first: they move the knobs)
             voiceCount = 0;
-            for (int t = 0; t < kTracks; ++t) { runLfos(t, beat, playing, (float)n / sr); setupTrack(t); voiceCount += activeVoices(t); }
+            for (int t = 0; t < kTracks; ++t) {
+                runArp(t, playing ? beat : freeBeat + pos * bpf, n);
+                runLfos(t, beat, playing, (float)n / sr); setupTrack(t); voiceCount += activeVoices(t);
+            }
             for (uint32_t i = 0; i < n; ++i) {
                 // the input buffer (bar starts are remembered for CAPTURE)
                 if (!freeze) liveWrite(inL ? inL[pos + i] : 0.f, inR ? inR[pos + i] : 0.f);
@@ -442,13 +450,19 @@ private:
         Grain g[kMaxGrains]; int ng = 0;
         float normInv = 1.f; int normWait = 0;
         float normA = 1.f, normP = 1.f;                      // smoothed sum of the windows playing (and of their squares)
-        Svf fl, fr; bool filterOn = false, hp = false;       // the voice's own filter (its envelope moves it)
+        Svf fl, fr; bool filterOn = false;       // the voice's own filter (its envelope moves it)
         // per segment
         int mode = gmClassic; double ra = 0, rb = 1, head = 0, scanInc = 0, grainInc = 1, origInc = 1, sprayFr = 0; float grainLen = 1000.f, overlap = 2.f;
         float incoh = 0.f;                                    // 0 = the grains add up in phase (amplitude sum), 1 = at random (power sum)
         float shape = 0.5f, jitter = 0.f, reverse = 0.f, octave = 0.f, spread = 0.f, pmix = 1.f; bool random = false, sync = false; double syncBeats = 0.25;
         float atkInc = 1.f, decCoef = 0.f, sus = 1.f, relCoef = 0.f; float panL = 0.707f, panR = 0.707f; int copies = 1;
-        float fBase = 64.f, fEnv = 0.f, fq = 0.7f;
+        float fEnv = 0.f, fq = 0.7f; int ftype = ftLP24;      // FILTER: type, envelope amount, resonance
+        Svf fl2, fr2;                                        // second stage of the 24 dB types
+        float fe = 0.f, feAtkInc = 1.f, feDecCoef = 0.f; int feStage = 0;   // the filter's own AD envelope
+        float velG = 1.f;                                    // VELOCITY: level from the note's velocity
+        // NOTES: grains taking other notes of a scale
+        int nBase = kBaseNote, nScale = 0, nRoot = 0, nRange = 1, nOrder = 0, nStep = 1, walk = 0, walkCount = 0;
+        float nAmount = 0.f; double fineSemis = 0.0;
         Svf hl, hr; bool lowCutOn = false;                   // LOW CUT (a second filter, high pass)
         // GRAIN MIX: the sample played straight (no grains) from POSITION to END, looping to START, at the note's pitch
         double dryPos = 0.0, dryInc = 1.0; bool dryInit = false; float dryG = 0.f, grainG = 1.f; int8_t dryLvl = 0;
@@ -457,6 +471,12 @@ private:
         Voice v[kSlots]; int64_t lastK = INT64_MIN, k0 = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
         bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, cSend = 0.f, gSend = 1.f, drive = 0.f;
         int64_t recSkipK = INT64_MIN;
+        // ARP: the notes it plays (held keys / MIDI and the sequencer's step notes)
+        struct Arp {
+            struct Note { int note; float vel; bool live, released, hold; double left; uint32_t order; };
+            Note nt[24]; int n = 0, down = 0; uint32_t ord = 0; int64_t lastTick = INT64_MIN; int pos = 0, count = 0;
+            uint8_t lock[kTrackParams]; bool hasLock = false;
+        } arp;
         Src src;
         float mod[kModTargets] = {};                          // LFO offsets in knob units, this segment
         double lfoPh[kLfos] = {}; float lfoRnd[kLfos] = {}, lfoOut[kLfos] = {}; bool lfoReset[kLfos] = {};
@@ -481,8 +501,8 @@ private:
                 for (int s = 0; s < kSlots; ++s) {
                     const Voice& v = T.v[s];
                     if (!v.active) continue;
-                    if (nv < kSlots) V.v[nv++] = {(float)v.headFrac, v.env * v.vel, (int16_t)v.note, (uint8_t)s, (uint8_t)(v.stage >= 2)};
-                    const float a = v.env * v.vel * v.normInv;
+                    if (nv < kSlots) V.v[nv++] = {(float)v.headFrac, v.env * v.velG, (int16_t)v.note, (uint8_t)s, (uint8_t)(v.stage >= 2)};
+                    const float a = v.env * v.velG * v.normInv;
                     for (int i = 0; i < v.ng && ng < kViewGrains; ++i) {
                         const Grain& g = v.g[i];
                         const float w = window(g);
@@ -606,12 +626,101 @@ private:
         }
     }
 
+    // ---------------------------------------------------------------- ARP
+    bool arpOn(int t) const { return arpModeOf(trackParam[t][tpAMODE]) != amOff; }
+    static void arpDropSeq(TrackState::Arp& A) { int j = 0; for (int i = 0; i < A.n; ++i) if (A.nt[i].live) A.nt[j++] = A.nt[i]; A.n = j; }
+    static void arpAdd(TrackState::Arp& A, int note, float vel, bool live, double left)
+    {
+        note = clampi(note, 0, 127);
+        for (int i = 0; i < A.n; ++i) if (A.nt[i].note == note && A.nt[i].live == live) { A.nt[i].vel = vel; A.nt[i].left = left; A.nt[i].hold = !live && left < 0.0; A.nt[i].released = false; return; }
+        if (A.n == 0) { A.pos = 0; A.count = 0; A.lastTick = INT64_MIN; }    // a new arpeggio starts at once
+        if (A.n < 24) A.nt[A.n++] = {note, vel, live, false, !live && left < 0.0, left, A.ord++};
+    }
+    void arpLiveOn(int t, int note, float vel)
+    {
+        TrackState::Arp& A = tr[t].arp;
+        const bool latch = trackParam[t][tpALATCH] >= 64.f;
+        if (latch && A.down == 0) { int j = 0; for (int i = 0; i < A.n; ++i) if (!A.nt[i].live) A.nt[j++] = A.nt[i]; A.n = j; }   // a new chord replaces the latched one
+        ++A.down;
+        A.hasLock = false;
+        arpAdd(A, note, vel, true, -1.0);
+    }
+    void arpLiveOff(int t, int note)
+    {
+        TrackState::Arp& A = tr[t].arp;
+        bool found = false;
+        for (int i = 0; i < A.n; ++i) if (A.nt[i].live && A.nt[i].note == note && !A.nt[i].released) { found = true; A.nt[i].released = true; }
+        if (!found) return;
+        A.down = std::max(0, A.down - 1);
+        if (trackParam[t][tpALATCH] >= 64.f) return;        // LATCH: the notes stay
+        int j = 0; for (int i = 0; i < A.n; ++i) if (!(A.nt[i].live && A.nt[i].released)) A.nt[j++] = A.nt[i]; A.n = j;
+    }
+    // per segment: the step notes that have ended leave, and on every tick of RATE the next note plays
+    void runArp(int t, double bt, uint32_t n)
+    {
+        TrackState& T = tr[t];
+        TrackState::Arp& A = T.arp;
+        for (int i = 0; i < A.n; ++i) if (!A.nt[i].live && !A.nt[i].hold) A.nt[i].left -= n;
+        { int j = 0; for (int i = 0; i < A.n; ++i) if (A.nt[i].live || A.nt[i].hold || A.nt[i].left > 0.0) A.nt[j++] = A.nt[i]; A.n = j; }
+        const float* K = trackParam[t];
+        const int mode = arpModeOf(K[tpAMODE]);
+        if (mode == amOff) { A.n = 0; A.down = 0; return; }
+        if (A.n == 0) return;
+        const double div = kArpRateBeats[arpRateOf(K[tpARATE])];
+        const double sw = (arpSwingOf(K[tpASWING]) - 0.5) * 2.0 * div;
+        int64_t k = (int64_t)std::floor(bt / div + 1e-9);
+        if (bt < k * div + ((k & 1) ? sw : 0.0)) --k;            // the swung tick has not come yet
+        if (k == A.lastTick) return;
+        const bool first = A.lastTick == INT64_MIN;
+        A.lastTick = k;
+        (void)first;
+        // the notes, low to high (AS PLAYED: in the order they came), over OCTAVES
+        int base[24]; int nb = 0;
+        for (int i = 0; i < A.n; ++i) base[nb++] = A.nt[i].note;
+        if (mode == amOrder) {
+            for (int i = 1; i < nb; ++i) for (int j = i; j > 0 && A.nt[j - 1].order > A.nt[j].order; --j) { std::swap(A.nt[j - 1], A.nt[j]); }
+            for (int i = 0; i < nb; ++i) base[i] = A.nt[i].note;
+        } else std::sort(base, base + nb);
+        const int oct = arpOctOf(K[tpAOCT]);
+        int list[96]; int L = 0;
+        for (int o = 0; o < oct; ++o) for (int i = 0; i < nb && L < 96; ++i) list[L++] = clampi(base[i] + 12 * o, 0, 127);
+        if (L == 0) return;
+        const int rep = arpRepOf(K[tpAREP]), len = arpLenOf(K[tpALEN]);
+        if (len > 0 && A.count >= len * rep) { A.count = 0; A.pos = 0; }
+        const int q0 = A.pos / rep;
+        int idx = 0;
+        switch (mode) {
+        case amUp: case amOrder: idx = q0 % L; break;
+        case amDown: idx = L - 1 - q0 % L; break;
+        case amUpDown: { const int p = std::max(1, 2 * L - 2), q = q0 % p; idx = q < L ? q : p - q; break; }
+        case amDownUp: { const int p = std::max(1, 2 * L - 2), q = q0 % p; idx = L - 1 - (q < L ? q : p - q); break; }
+        case amRandom: idx = std::min(L - 1, (int)(T.rng.uni() * L)); break;
+        case amConverge: { const int q = q0 % L; idx = (q & 1) ? L - 1 - q / 2 : q / 2; break; }
+        case amDiverge: { const int m = (L - 1) / 2, q = q0 % L; idx = clampi((q & 1) ? m + (q + 1) / 2 : m - q / 2, 0, L - 1); break; }
+        case amPinky: { if (L < 2) { idx = 0; break; } const int q = q0 % (2 * (L - 1)); idx = (q & 1) ? L - 1 : q / 2; break; }
+        case amThumb: { if (L < 2) { idx = 0; break; } const int q = q0 % (2 * (L - 1)); idx = (q & 1) ? q / 2 + 1 : 0; break; }
+        default: idx = 0; break;
+        }
+        ++A.pos; ++A.count;
+        const double gate = arpGateOf(K[tpAGATE]) * div * spb;
+        float vel = 0.f; for (int i = 0; i < A.n; ++i) vel = std::max(vel, A.nt[i].vel);
+        const uint8_t* lk = A.hasLock ? A.lock : nullptr;
+        if (mode == amChord) { for (int i = 0; i < L && i < kVoices; ++i) startNote(t, lk, list[i], vel, false, gate, false); }
+        else startNote(t, lk, list[idx], vel, false, gate, true);
+    }
+
     // a sequenced step: its note (or chord), its locks, its length in beats (< 0 = HOLD)
     void playStep(int t, const Pattern& P, int step, double gateBeats)
     {
         const double gateFrames = gateBeats < 0.0 ? -1.0 : gateBeats * spb;
         const ChordDef& ch = kChords[P.chord[t][step] % kChordCount];
         TrackState& T = tr[t];
+        if (arpOn(t)) {                                     // ARP: the step's notes become what it plays
+            arpDropSeq(T.arp);
+            std::memcpy(T.arp.lock, P.locks[t][step], kTrackParams); T.arp.hasLock = true;
+            for (int i = 0; i < ch.n; ++i) arpAdd(T.arp, P.note[t][step] + ch.notes[i], 1.f, false, gateFrames);
+            return;
+        }
         // HOLD notes end when the track plays its next note
         for (auto& v : T.v) if (v.active && !v.live && v.holdGate && v.stage < 2 && !bank.kit[t].legato) v.stage = 2;
         for (int i = 0; i < ch.n; ++i) startNote(t, P.locks[t][step], P.note[t][step] + ch.notes[i], 1.f, false, gateFrames, ch.n == 1);
@@ -647,7 +756,8 @@ private:
         v.gateLeft = gateFrames; v.holdGate = !live && gateFrames < 0.0;
         if (locks) std::memcpy(v.lock, locks, kTrackParams); else std::memset(v.lock, kNoLock, kTrackParams);
         v.scan = 0.0; v.timer = 0.f; v.first = true; v.gridK = INT64_MIN; v.normA = v.normP = 1.f; v.normWait = 0;
-        v.fl.reset(); v.fr.reset(); v.filterOn = false; v.hl.reset(); v.hr.reset(); v.lowCutOn = false; v.dryInit = false;
+        v.fl.reset(); v.fr.reset(); v.fl2.reset(); v.fr2.reset(); v.filterOn = false; v.hl.reset(); v.hr.reset(); v.lowCutOn = false; v.dryInit = false;
+        v.fe = 0.f; v.feStage = 0; v.walk = 0; v.walkCount = 0;
         v.liveStart = (double)liveW;
         for (int j = 0; j < 4; ++j) {                      // LOOP copies: fixed detune / pan for this note
             v.ltimer[j] = -1e9f;                           // set at the first sample (copies staggered)
@@ -760,8 +870,16 @@ private:
                 v.headFrac = clampf((float)((v.head - (S.W - winLen)) / winLen), 0.f, 1.f);
             } else v.headFrac = v.head / (double)S.n[0];
             int st = pitchSemis(P(tpPITCH)) + (v.note - kBaseNote);
-            if (bank.scale) st = quantizeNote(kBaseNote + st, bank.root, bank.scale) - kBaseNote;   // SCALE: the nearest note of the scale
-            const double semis = st + fineCents(P(tpFINE)) / 100.0;
+            {   // the scale of the track (NOTES page: SCALE / ROOT, GLOBAL = the bottom bar)
+                const int sc = nScaleOf(P(tpNSCALE)), rt = nRootOf(P(tpNROOT));
+                v.nScale = sc < 0 ? bank.scale : sc; v.nRoot = rt < 0 ? bank.root : rt;
+            }
+            if (v.nScale) st = quantizeNote(kBaseNote + st, v.nRoot, v.nScale) - kBaseNote;   // the nearest note of the scale
+            v.fineSemis = fineCents(P(tpFINE)) / 100.0;
+            const double semis = st + v.fineSemis;
+            v.nBase = kBaseNote + st; v.nAmount = P(tpNAMOUNT) / 127.f; v.nRange = nRangeOct(P(tpNRANGE));
+            v.nOrder = nOrderOf(P(tpNORDER)); v.nStep = nStepOf(P(tpNSTEP));
+            { const float sens = P(tpVELSENS) / 127.f; v.velG = 1.f - sens * (1.f - clampf(v.vel, 0.f, 1.f)); }
             v.grainInc = srcRatio * std::pow(2.0, semis / 12.0);
             v.origInc = srcRatio;
             v.pmix = P(tpPMIX) / 127.f;
@@ -791,14 +909,21 @@ private:
             v.relCoef = decayCoef(releaseSec(P(tpRELEASE)), sr);
             const float pan = (P(tpPAN) - 64.f) / 63.f;
             v.panL = std::cos((pan + 1.f) * kPi * 0.25f); v.panR = std::sin((pan + 1.f) * kPi * 0.25f);
-            // the voice's filter, moved by its envelope (FLT ENV): up to 5 octaves either way
-            v.fBase = P(tpFILTER); v.fEnv = (P(tpFLTENV) - 64.f) / 63.f; v.fq = resoQ(P(tpRESO), 0.6f, 12.f);
-            const bool on = std::fabs(v.fBase - 64.f) >= 1.f;
-            if (on && !v.filterOn) { v.fl.reset(); v.fr.reset(); }
-            v.filterOn = on; v.hp = v.fBase > 64.f;
-            if (on) {
-                const float hz = clampf(filterHz(v.fBase) * std::exp2(v.fEnv * 5.f * v.env), 20.f, sr * 0.45f);
-                v.fl.setup(hz, v.fq, sr); v.fr.setup(hz, v.fq, sr);
+            // the voice's filter: TYPE, CUTOFF moved by its own AD envelope (ENV AMT, up to 5 octaves) and by the note (KEY TRK)
+            {
+                v.ftype = filterTypeOf(P(tpFTYPE));
+                const float cut = P(tpCUTOFF), kt = P(tpKEYTRK) / 127.f;
+                v.fEnv = (P(tpFLTENV) - 64.f) / 63.f; v.fq = resoQ(P(tpRESO), 0.6f, 12.f);
+                v.feAtkInc = 1.f / std::max(1.f, fEnvSec(P(tpFATK)) * sr); v.feDecCoef = decayCoef(fEnvSec(P(tpFDEC)), sr);
+                const bool lpT = v.ftype == ftLP24 || v.ftype == ftLP12, hpT = v.ftype == ftHP12 || v.ftype == ftHP24;
+                const bool off = (lpT && cut >= 126.5f && v.fEnv <= 0.004f && kt < 0.004f) || (hpT && cut <= 0.5f && v.fEnv >= -0.004f && kt < 0.004f);
+                if (!off && !v.filterOn) { v.fl.reset(); v.fr.reset(); v.fl2.reset(); v.fr2.reset(); }
+                v.filterOn = !off;
+                if (!off) {
+                    const float hz = clampf(cutoffHz(cut) * std::exp2(v.fEnv * 5.f * v.fe + kt * (v.note - kBaseNote) / 12.f), 20.f, sr * 0.45f);
+                    v.fl.setup(hz, v.fq, sr); v.fr.setup(hz, v.fq, sr);
+                    if (v.ftype == ftLP24 || v.ftype == ftHP24) { const float q2 = std::sqrt(v.fq * 0.707f); v.fl2.setup(hz, q2, sr); v.fr2.setup(hz, q2, sr); }
+                }
             }
             {   // LOW CUT
                 const float lc = P(tpLOWCUT);
@@ -829,6 +954,31 @@ private:
         T.gSend = kv(T, nv, knobs, tpCHAOS) / 127.f;
     }
 
+    // NOTES: the scale note a grain takes (RANDOM / AROUND / UP / DOWN / PING-PONG / CHORD), from the voice's note
+    int scaleNote(TrackState& T, Voice& v)
+    {
+        int list[64]; int n = 0;
+        const bool around = v.nOrder == 1;
+        const int lo = around ? v.nBase - 6 * v.nRange : v.nBase, hi = around ? v.nBase + 6 * v.nRange : v.nBase + 12 * v.nRange;
+        for (int x = lo; x <= hi && n < 64; ++x) if (v.nScale == 0 || inScale(x, v.nRoot, v.nScale)) list[n++] = x;
+        if (n == 0) return v.nBase;
+        int idx;
+        switch (v.nOrder) {
+        case 2: idx = v.walk % n; break;                                            // UP
+        case 3: idx = n - 1 - v.walk % n; break;                                    // DOWN
+        case 4: { const int p = std::max(1, 2 * n - 2), q = v.walk % p; idx = q < n ? q : p - q; break; }   // PING-PONG
+        case 5: {                                                                   // CHORD: 1st, 3rd, 5th of the scale
+            int perOct = 0; for (int x = 0; x < 12; ++x) perOct += v.nScale == 0 ? 1 : (int)inScale(v.nRoot + x, v.nRoot, v.nScale);
+            perOct = std::max(1, perOct);
+            const int deg = (int)(T.rng.uni() * 3.f) * 2, oct = (int)(T.rng.uni() * v.nRange);
+            idx = std::min(n - 1, oct * perOct + std::min(deg, perOct - 1)); break;
+        }
+        default: idx = std::min(n - 1, (int)(T.rng.uni() * n)); break;             // RANDOM, AROUND
+        }
+        if (v.nOrder >= 2 && v.nOrder <= 4 && ++v.walkCount >= v.nStep) { v.walkCount = 0; ++v.walk; }
+        return list[idx];
+    }
+
     // a new grain from the play head; layer >= 0 = a LOOP copy
     void spawn(TrackState& T, Voice& v, int layer)
     {
@@ -847,6 +997,8 @@ private:
         const bool pitched = v.pmix >= 0.999f || (v.pmix > 0.001f && rng.uni() < v.pmix);
         float semis = 0.f;
         if (!pitched) inc = v.origInc;
+        else if (v.nAmount > 0.f && (v.nAmount >= 0.999f || rng.uni() < v.nAmount))   // NOTES: another note of the scale
+            inc = v.origInc * std::pow(2.0, (scaleNote(T, v) - kBaseNote + v.fineSemis) / 12.0);
         if (v.jitter > 0.f) semis += (loop ? (layer > 0 ? v.lDet[layer] * 0.35f * v.jitter : 0.f) : rng.next() * v.jitter * 0.3f);   // up to 30 cents: in tune
         if (pitched && v.octave > 0.f && rng.uni() < v.octave) { semis += rng.uni() < 0.75f ? 12.f : -12.f; ++T.nOct; }
         if (semis != 0.f) inc *= std::pow(2.0, semis / 12.0);
@@ -992,7 +1144,7 @@ private:
             const float norm = v.incoh >= 0.999f ? P : (v.incoh <= 0.001f ? A : std::exp((1.f - v.incoh) * std::log(std::max(A, 1e-6f)) + v.incoh * std::log(std::max(P, 1e-6f))));
             v.normInv = 1.f / std::max(1.f, norm);
         }
-        const float a = v.env * v.vel * v.normInv;
+        const float a = v.env * v.velG * v.normInv;
         l *= a; r *= a;
         if (v.grainG < 0.999f) {                              // GRAIN MIX: the straight sample in
             l *= v.grainG; r *= v.grainG;
@@ -1007,13 +1159,25 @@ private:
                     const float w = (float)(into / xf);
                     al += (bl - al) * w; ar += (br - ar) * w;
                 }
-                const float g = v.dryG * v.env * v.vel * 0.707f;
+                const float g = v.dryG * v.env * v.velG * 0.707f;
                 l += al * g * v.panL; r += ar * g * v.panR;
                 v.dryPos += v.dryInc;
                 if (v.dryPos >= v.rb) v.dryPos -= rl;
             }
         }
-        if (v.filterOn) { v.fl.tick(l); v.fr.tick(r); l = v.hp ? v.fl.hp : v.fl.lp; r = v.hp ? v.fr.hp : v.fr.lp; }
+        // the filter envelope (attack, then decay to nothing)
+        if (v.feStage == 0) { v.fe += v.feAtkInc; if (v.fe >= 1.f) { v.fe = 1.f; v.feStage = 1; } } else v.fe *= v.feDecCoef;
+        if (v.filterOn) {
+            v.fl.tick(l); v.fr.tick(r);
+            switch (v.ftype) {
+            case ftLP24: v.fl2.tick(v.fl.lp); v.fr2.tick(v.fr.lp); l = v.fl2.lp; r = v.fr2.lp; break;
+            case ftLP12: l = v.fl.lp; r = v.fr.lp; break;
+            case ftBP: l = v.fl.bp; r = v.fr.bp; break;
+            case ftHP12: l = v.fl.hp; r = v.fr.hp; break;
+            case ftHP24: v.fl2.tick(v.fl.hp); v.fr2.tick(v.fr.hp); l = v.fl2.hp; r = v.fr2.hp; break;
+            default: l = v.fl.lp + v.fl.hp; r = v.fr.lp + v.fr.hp; break;
+            }
+        }
         if (v.lowCutOn) { v.hl.tick(l); v.hr.tick(r); l = v.hl.hp; r = v.hr.hp; }
         outL += l; outR += r;
     }

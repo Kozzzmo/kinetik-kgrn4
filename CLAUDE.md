@@ -148,3 +148,19 @@ CHAOS, no text under the display, 128 steps, LFO display of the other plug-ins, 
 - `Bank::scale` / `root` (line / command `G scale root`, copied with the kit by the plugin): `quantizeNote` in
   `setupTrack` on note + PITCH (+ LFO); `kScaleNames` / `kScaleMask` / `kRootNames` in `Params.hpp`. UI `scaleBox` /
   `rootBox` in the bottom bar, out-of-scale keys dimmed.
+
+## 0.7.0 (owner: FILTER page, a knob for the grains' scale with random / ordered notes, wheel + modifiers on steps, RESET
+TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page tabs distinct from the buttons, red UNDO, ARP)
+
+- `Params.hpp`: 69 knobs: SOURCE 8, GRAIN 8, NOTES 6 (`tpNSCALE` -1 = GLOBAL, `tpNROOT`, `tpNAMOUNT`, `tpNRANGE`,
+  `tpNORDER`, `tpNSTEP`), AMP 8 (`tpVELSENS` new), FILTER 8 (`tpFTYPE` `kFilterTypeNames`, `tpCUTOFF` `cutoffHz`,
+  `tpRESO`, `tpFLTENV`, `tpFATK` / `tpFDEC` `fEnvSec`, `tpKEYTRK`, `tpLOWCUT`), FX 4 sends, `tpGMIX`, then ARP 8 (not LFO
+  targets: `kModTargets` = `tpAMODE` = 43), LFO 1-3. Pages `kPageFirst` / `kPageLen` / `kLfoPage0`. `trackDefault` MIX = 64
+  (kTP default 127 for the presets). Helpers `binOf` / `binKnob`, `nScaleOf`... `arpModeOf`...
+- `Bank.hpp`: `KGRN46`; old locks go through the 0.5 layout (`Knob05` enum, `kKnobs02/03/04` -> 0.5, `kKnobs05` -> now,
+  `convertFilter05` = bipolar FILTER -> TYPE + CUTOFF, `convertKnob05`, `convertOldLine`, a converted line may hold several).
+- Engine: filter (2 SVF stages for 24 dB, BP, notch, AD env `fe`, key track); `velG`; `scaleNote` per grain (NOTES); ARP
+  (`TrackState::Arp`, `arpOn`, `arpLiveOn/Off` with LATCH, `arpDropSeq`, `playStep` feeds it with the step's notes + locks,
+  `runArp` per segment on the beat grid with swing, LENGTH / REPEAT, CHORD plays all).
+- UI: `pageBar` tabs, `mixZone` fader (`drawMix`, `mixAt`, `dkMix`), `trackResetBtn` -> `resetTrack`, wheel on steps
+  with modifiers (onScroll), MATERIAL shows `srcName`, red UNDO (as KMSP-6). User presets `KGRN4-PRESET 5` (1-4 converted).

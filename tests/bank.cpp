@@ -57,6 +57,11 @@ int main()
         const int d = lfoDest(o.patterns[0].locks[1][5][tpL2DEST]);
         check(o.patterns[0].locks[1][5][tpVOLUME] == 90 && d == tpDELAY + 1, "0.4 banks: locks and LFO destinations converted");
     }
+    {   // 0.5 / 0.6 banks: the bipolar FILTER lock becomes TYPE + CUTOFF, GRAIN MIX moves
+        Bank o; deserializeBank(o, "KGRN45\nk 0 0 3 24 40\nk 0 0 3 20 10\n");
+        check(filterTypeOf(o.patterns[0].locks[0][3][tpFTYPE]) == ftLP12 && o.patterns[0].locks[0][3][tpCUTOFF] < 100 && o.patterns[0].locks[0][3][tpGMIX] == 10,
+              "0.5 banks: FILTER -> TYPE + CUTOFF, GRAIN MIX moved");
+    }
     {   // 0.6: LOOP SYNC beats and the SCALE are saved
         Bank b6; b6.initDefault(); b6.kit[2].beats = 8; b6.scale = 2; b6.root = 9;
         Bank c6; deserializeBank(c6, serializeBank(b6).c_str());

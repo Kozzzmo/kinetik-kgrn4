@@ -39,8 +39,12 @@ static const char* const kModeHelp[kGrainModes] = {
 enum TrackParam {
     tpSTART = 0, tpEND, tpPOSITION, tpSLICE, tpSCAN, tpSPRAY, tpPITCH, tpPMIX,          // SOURCE
     tpSIZE, tpDENSITY, tpSHAPE, tpSPREAD, tpJITTER, tpREVERSE, tpOCTAVE, tpFINE,        // GRAIN
-    tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE, tpGMIX, tpDRIVE, tpVOLUME, tpPAN,          // AMP
-    tpFILTER, tpRESO, tpFLTENV, tpLOWCUT, tpDELAY, tpREVERB, tpCHORUS, tpCHAOS,         // FX (track)
+    tpNSCALE, tpNROOT, tpNAMOUNT, tpNRANGE, tpNORDER, tpNSTEP,                          // NOTES (scale notes per grain)
+    tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE, tpVELSENS, tpDRIVE, tpVOLUME, tpPAN,       // AMP
+    tpFTYPE, tpCUTOFF, tpRESO, tpFLTENV, tpFATK, tpFDEC, tpKEYTRK, tpLOWCUT,            // FILTER
+    tpDELAY, tpREVERB, tpCHORUS, tpCHAOS,                                               // FX sends
+    tpGMIX,                                                                             // SAMPLE / GRAINS (own fader)
+    tpAMODE, tpARATE, tpAOCT, tpAGATE, tpALEN, tpASWING, tpAREP, tpALATCH,              // ARP
     tpL1WAVE, tpL1RATE, tpL1SYNC, tpL1DEPTH, tpL1DEST, tpL1TRIG,                        // LFO 1
     tpL2WAVE, tpL2RATE, tpL2SYNC, tpL2DEPTH, tpL2DEST, tpL2TRIG,                        // LFO 2
     tpL3WAVE, tpL3RATE, tpL3SYNC, tpL3DEPTH, tpL3DEST, tpL3TRIG,                        // LFO 3
@@ -48,10 +52,12 @@ enum TrackParam {
 };
 static constexpr int kLfos = 3, kLfoParams = 6;
 inline int lfoParam(int i, int k) { return tpL1WAVE + i * kLfoParams + k; }
-static constexpr int kModTargets = tpL1WAVE;         // LFOs can move every knob before the LFOs
-static constexpr int kPages = 7;
-static const char* const kPageNames[kPages] = {"SOURCE", "GRAIN", "AMP", "FX", "LFO 1", "LFO 2", "LFO 3"};
-static const int kPageStart[kPages + 1] = {0, 8, 16, 24, 32, 38, 44, 50};
+static constexpr int kModTargets = tpAMODE;          // LFOs can move every knob before the ARP (and GRAIN MIX)
+static constexpr int kPages = 10;
+static const char* const kPageNames[kPages] = {"SOURCE", "GRAIN", "NOTES", "AMP", "FILTER", "FX", "ARP", "LFO 1", "LFO 2", "LFO 3"};
+static const int kPageFirst[kPages] = {tpSTART, tpSIZE, tpNSCALE, tpATTACK, tpFTYPE, tpDELAY, tpAMODE, tpL1WAVE, tpL2WAVE, tpL3WAVE};
+static const int kPageLen[kPages] = {8, 8, 6, 8, 8, 4, 8, 6, 6, 6};
+static constexpr int kLfoPage0 = 7;                  // the first LFO page
 struct TrackParamDef { const char* name; uint8_t def; const char* help; };
 #define KN_LFO_DEFS \
     {"WAVE",     0,   "LFO shape: triangle, sine, square, saw up, saw down, random"}, \
@@ -77,22 +83,41 @@ static const TrackParamDef kTP[kTrackParams] = {
     {"REVERSE",  0,   "Chance that a grain plays backwards"},
     {"OCTAVE",   0,   "Chance that a grain plays an octave up (mostly) or down: shimmer"},
     {"FINE",     64,  "Fine tuning, -50 to +50 cents"},
+    {"SCALE",    0,   "The scale this track's grains play in: GLOBAL = the SCALE of the bottom bar, OFF = no scale"},
+    {"ROOT",     0,   "Root of that scale: GLOBAL = the ROOT of the bottom bar (C = the sample's own pitch)"},
+    {"NOTES",    0,   "How many grains play other notes of the scale instead of the note itself (0 = none, full = all)"},
+    {"RANGE",    0,   "How far those notes go: 1 to 4 octaves above the note (AROUND: around it)"},
+    {"ORDER",    0,   "Which scale notes the grains take: RANDOM, AROUND (random above and below), UP, DOWN, PING-PONG, CHORD (1-3-5)"},
+    {"EVERY",    0,   "UP / DOWN / PING-PONG: a new note every 1 to 8 grains"},
     {"ATTACK",   0,   "Fade-in of each note"},
     {"DECAY",    64,  "Time to fall from full level to SUSTAIN"},
     {"SUSTAIN",  127, "Level held while the note lasts (its step length, or the key)"},
     {"RELEASE",  50,  "Fade-out after the note ends"},
-    {"GRAIN MIX",127, "Left = the sample as it is (played straight from START to END at the note's pitch), right = the grains"},
+    {"VELOCITY", 64,  "How much the velocity (MIDI, recorded notes) changes the level"},
     {"DRIVE",    0,   "Warm saturation of the track"},
     {"VOLUME",   100, "Track level"},
     {"PAN",      64,  "Track position in the stereo field"},
-    {"FILTER",   64,  "Left = low pass, right = high pass, centre = off"},
+    {"TYPE",     10,  "Filter type: LOW PASS 24 / 12 dB, BAND PASS, HIGH PASS 12 / 24 dB, NOTCH"},
+    {"CUTOFF",   127, "Cutoff frequency (a low pass fully open or a high pass fully closed is off)"},
     {"RESO",     20,  "Filter resonance"},
-    {"FLT ENV",  64,  "How much each note's envelope moves the filter (left = closes, right = opens)"},
+    {"ENV AMT",  64,  "How far the filter envelope moves the cutoff (left = down, right = up, up to 5 octaves)"},
+    {"ENV ATK",  0,   "Attack of the filter envelope"},
+    {"ENV DEC",  64,  "Decay of the filter envelope"},
+    {"KEY TRK",  0,   "The cutoff follows the note (100% = one octave per octave)"},
     {"LOW CUT",  0,   "A second filter that removes the lows (0 = off)"},
     {"DELAY",    0,   "Send to the echo"},
     {"REVERB",   0,   "Send to the reverb"},
     {"CHORUS",   0,   "Send to the chorus"},
     {"CHAOS",    127, "How much of the track CHAOS can catch and repeat"},
+    {"MIX",      127, "SAMPLE (the sample played straight from POSITION to END at the note's pitch) against GRAINS"},
+    {"MODE",     0,   "Arpeggiator: OFF, UP, DOWN, UP-DOWN, DOWN-UP, RANDOM, AS PLAYED, CHORD, CONVERGE, DIVERGE, PINKY, THUMB"},
+    {"RATE",     84,  "Arpeggiator speed (note value at the tempo)"},
+    {"OCTAVES",  0,   "Arpeggiator range: 1 to 4 octaves up"},
+    {"GATE",     50,  "Length of each arpeggiated note (5% to 200% of its step)"},
+    {"LENGTH",   0,   "ALL, or the arpeggio starts again after 1 to 16 notes"},
+    {"SWING",    0,   "Arpeggiator swing (50% = straight)"},
+    {"REPEAT",   0,   "Each arpeggiated note plays 1 to 4 times"},
+    {"LATCH",    0,   "Right half: the notes keep playing after the keys are released (the next chord replaces them)"},
     KN_LFO_DEFS, KN_LFO_DEFS, KN_LFO_DEFS,
 };
 #undef KN_LFO_DEFS
@@ -122,14 +147,21 @@ inline float trackParamDefault(int k) { return kTP[k].def; }    // neutral value
 inline float trackDefault(int t, int k)
 {
     if (k >= tpL1WAVE) return trackParamDefault(k);
-    static const int8_t d[kTracks][kModTargets] = {
-        // STA END POS SLC SCAN SPRY PIT PMIX  SIZE DENS SHAP SPRD JIT REV OCT FINE  ATK DEC SUS REL GMIX DRV VOL PAN  FILT RES FENV LCUT DLY REV CHO CHA
-        {   0, 127, 30,  0,  72,  30, 64, 127,   80, 100,  64,  85,  20, 15,  0, 64,   70, 64, 127, 70, 127,  0, 96, 64,   64, 20, 64,   0,  0, 45,  0, 127 },
-        {   0, 127, 10,  0,  80,  12, 64, 127,   76,  80,  64,  65,  12,  0,  0, 64,   12, 64, 127, 60, 127,  0, 92, 64,   64, 20, 64,   0, 20, 35,  0, 127 },
-        {   0, 127,  0,  0,  96,   0, 64, 127,   48,   0,  10,  25,   0,  0,  0, 64,    0, 64, 127, 30, 127,  0,100, 64,   64, 20, 64,   0,  0, 12,  0, 127 },
-        {   0, 127, 20,  0,  70,  70, 64, 127,   45, 110,  70, 110,  25, 30, 25, 64,    0, 90,  80, 70, 127,  0, 84, 64,   64, 20, 64,   0, 40, 50,  0, 127 },
+    // SOURCE + GRAIN as before; NOTES, ARP and LFOs neutral; MIX = half sample, half grains (owner's choice for RESET)
+    static const int8_t d[kTracks][24] = {
+        // STA END POS SLC SCAN SPRY PIT PMIX  SIZE DENS SHAP SPRD JIT REV OCT FINE  ATK DEC SUS REL VEL DRV VOL PAN
+        {   0, 127, 30,  0,  72,  30, 64, 127,   80, 100,  64,  85,  20, 15,  0, 64,   70, 64, 127, 70, 64,  0, 96, 64 },
+        {   0, 127, 10,  0,  80,  12, 64, 127,   76,  80,  64,  65,  12,  0,  0, 64,   12, 64, 127, 60, 64,  0, 92, 64 },
+        {   0, 127,  0,  0,  96,   0, 64, 127,   48,   0,  10,  25,   0,  0,  0, 64,    0, 64, 127, 30, 64,  0,100, 64 },
+        {   0, 127, 20,  0,  70,  70, 64, 127,   45, 110,  70, 110,  25, 30, 25, 64,    0, 90,  80, 70, 64,  0, 84, 64 },
     };
-    return t >= 0 && t < kTracks && k >= 0 ? (float)d[t][k] : trackParamDefault(k);
+    static const int8_t sends[kTracks][4] = {{0, 45, 0, 127}, {20, 35, 0, 127}, {0, 12, 0, 127}, {40, 50, 0, 127}};
+    if (t < 0 || t >= kTracks || k < 0) return trackParamDefault(k);
+    if (k < tpNSCALE) return d[t][k];
+    if (k >= tpATTACK && k <= tpPAN) return d[t][16 + k - tpATTACK];
+    if (k >= tpDELAY && k <= tpCHAOS) return sends[t][k - tpDELAY];
+    if (k == tpGMIX) return 64.f;
+    return trackParamDefault(k);
 }
 // master effect names and defaults (as KDSP-16)
 static constexpr int kMasterCount = gGL_MIX - gECHO_TIME + 1;
@@ -288,6 +320,35 @@ inline std::string bipText(float v) { char b[16]; const int p = (int)std::lround
 inline std::string secText(float s) { char b[16]; if (s >= 1.f) std::snprintf(b, sizeof(b), "%.1f S", s); else std::snprintf(b, sizeof(b), "%d MS", (int)std::lround(s * 1000.f)); return b; }
 inline float filterHz(float v) { return v < 64.f ? 20000.f * std::pow(80.f / 20000.f, (64.f - v) / 64.f) : 20.f * std::pow(400.f, (v - 64.f) / 63.f); }
 
+// ---- NOTES / FILTER / ARP tables
+static constexpr int kNOrders = 6;
+static const char* const kNOrderNames[kNOrders] = {"RANDOM", "AROUND", "UP", "DOWN", "PING-PONG", "CHORD"};
+inline int binOf(float v, int n) { return clampi((int)(v * n / 128.f), 0, n - 1); }
+inline float binKnob(int i, int n) { return (i + 0.5f) * 128.f / n; }
+inline int nScaleOf(float v) { return binOf(v, kScales + 1) - 1; }       // -1 = GLOBAL, else a kScaleNames index
+inline int nRootOf(float v) { return binOf(v, 13) - 1; }                 // -1 = GLOBAL, else 0..11
+inline int nRangeOct(float v) { return 1 + binOf(v, 4); }
+inline int nOrderOf(float v) { return binOf(v, kNOrders); }
+inline int nStepOf(float v) { return 1 + binOf(v, 8); }
+static constexpr int kFilterTypes = 6;
+enum FilterType { ftLP24, ftLP12, ftBP, ftHP12, ftHP24, ftNotch };
+static const char* const kFilterTypeNames[kFilterTypes] = {"LP 24", "LP 12", "BAND", "HP 12", "HP 24", "NOTCH"};
+inline int filterTypeOf(float v) { return binOf(v, kFilterTypes); }
+inline float fEnvSec(float v) { return 0.0005f * std::pow(8000.f, v / 127.f); }   // 0.5 ms .. 4 s
+static constexpr int kArpModes = 12;
+enum ArpMode { amOff, amUp, amDown, amUpDown, amDownUp, amRandom, amOrder, amChord, amConverge, amDiverge, amPinky, amThumb };
+static const char* const kArpModeNames[kArpModes] = {"OFF", "UP", "DOWN", "UP-DOWN", "DOWN-UP", "RANDOM", "AS PLAYED", "CHORD", "CONVERGE", "DIVERGE", "PINKY", "THUMB"};
+static constexpr int kArpRates = 13;
+static const double kArpRateBeats[kArpRates] = {2.0, 1.5, 1.0, 2.0 / 3, 0.75, 0.5, 1.0 / 3, 0.375, 0.25, 1.0 / 6, 0.125, 1.0 / 12, 0.0625};
+static const char* const kArpRateNames[kArpRates] = {"1/2", "1/4D", "1/4", "1/4T", "1/8D", "1/8", "1/8T", "1/16D", "1/16", "1/16T", "1/32", "1/32T", "1/64"};
+inline int arpModeOf(float v) { return binOf(v, kArpModes); }
+inline int arpRateOf(float v) { return binOf(v, kArpRates); }
+inline int arpOctOf(float v) { return 1 + binOf(v, 4); }
+inline float arpGateOf(float v) { return 0.05f + v / 127.f * 1.95f; }
+inline int arpLenOf(float v) { return binOf(v, 17); }                    // 0 = all
+inline float arpSwingOf(float v) { return 0.5f + v / 127.f * 0.25f; }
+inline int arpRepOf(float v) { return 1 + binOf(v, 4); }
+
 inline std::string trackValueText(int k, float v, int slices = 0, int mode = gmClassic, bool sync = false)
 {
     char b[32];
@@ -309,20 +370,30 @@ inline std::string trackValueText(int k, float v, int slices = 0, int mode = gmC
         std::snprintf(b, sizeof(b), "%s X%.1f", cloudRandom(v) ? "RND" : "REG", cloudOverlap(v)); return b;
     case tpSHAPE: if (mode == gmLoop) { std::snprintf(b, sizeof(b), "XF %d%%", (int)std::lround(v / 127.f * 50.f)); return b; } return shapeName(v);
     case tpSPRAY: if (v < 0.5f) return "OFF"; std::snprintf(b, sizeof(b), "%d MS", (int)std::lround(spraySec(v) * 1000.f)); return b;
-    case tpJITTER: case tpREVERSE: case tpOCTAVE: case tpSPREAD: case tpDRIVE: case tpDELAY: case tpREVERB: case tpCHORUS: case tpCHAOS: return pctText(v);
+    case tpJITTER: case tpREVERSE: case tpOCTAVE: case tpSPREAD: case tpDRIVE: case tpDELAY: case tpREVERB: case tpCHORUS: case tpCHAOS:
+    case tpNAMOUNT: case tpKEYTRK: case tpVELSENS: return pctText(v);
+    case tpNSCALE: { const int sc = nScaleOf(v); return sc < 0 ? "GLOBAL" : kScaleNames[sc]; }
+    case tpNROOT: { const int r = nRootOf(v); return r < 0 ? "GLOBAL" : kRootNames[r]; }
+    case tpNRANGE: std::snprintf(b, sizeof(b), "%d OCT", nRangeOct(v)); return b;
+    case tpNORDER: return kNOrderNames[nOrderOf(v)];
+    case tpNSTEP: { const int n = nStepOf(v); std::snprintf(b, sizeof(b), n == 1 ? "1 GRAIN" : "%d GRAINS", n); return b; }
+    case tpFTYPE: return kFilterTypeNames[filterTypeOf(v)];
+    case tpCUTOFF: { const float hz = cutoffHz(v); if (hz >= 1000.f) std::snprintf(b, sizeof(b), "%.1fK", hz / 1000.f); else std::snprintf(b, sizeof(b), "%d HZ", (int)hz); return b; }
+    case tpFATK: case tpFDEC: return secText(fEnvSec(v));
+    case tpAMODE: return kArpModeNames[arpModeOf(v)];
+    case tpARATE: return kArpRateNames[arpRateOf(v)];
+    case tpAOCT: std::snprintf(b, sizeof(b), "%d OCT", arpOctOf(v)); return b;
+    case tpAGATE: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(arpGateOf(v) * 100.f)); return b;
+    case tpALEN: { const int n = arpLenOf(v); if (!n) return "ALL"; std::snprintf(b, sizeof(b), "%d", n); return b; }
+    case tpASWING: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(arpSwingOf(v) * 100.f)); return b;
+    case tpAREP: std::snprintf(b, sizeof(b), "X%d", arpRepOf(v)); return b;
+    case tpALATCH: return v >= 64.f ? "ON" : "OFF";
     case tpGMIX: if (v < 0.5f) return "SAMPLE"; if (v > 126.5f) return "GRAINS"; std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 127.f * 100.f)); return b;
     case tpLOWCUT: { if (v < 0.5f) return "OFF"; const float hz = cutHz(v, 20.f, 2000.f); if (hz >= 1000.f) std::snprintf(b, sizeof(b), "%.1fK", hz / 1000.f); else std::snprintf(b, sizeof(b), "%d HZ", (int)hz); return b; }
     case tpATTACK: return secText(attackSec(v));
     case tpDECAY: return secText(decaySec(v));
     case tpSUSTAIN: return pctText(v);
     case tpRELEASE: return secText(releaseSec(v));
-    case tpFILTER: {
-        if (std::fabs(v - 64.f) < 1.f) return "OFF";
-        const float hz = filterHz(v);
-        if (hz >= 1000.f) std::snprintf(b, sizeof(b), "%s %.1fK", v < 64.f ? "LP" : "HP", hz / 1000.f);
-        else std::snprintf(b, sizeof(b), "%s %d", v < 64.f ? "LP" : "HP", (int)hz);
-        return b;
-    }
     case tpFLTENV: return bipText(v);
     case tpVOLUME: { const float g = volumeGain(v); if (g < 0.001f) return "-INF"; std::snprintf(b, sizeof(b), "%+.1fdB", 20.f * std::log10(g)); return b; }
     case tpPAN: { const int p = (int)std::lround((v - 64.f) / 63.f * 100.f); if (p == 0) return "C"; std::snprintf(b, sizeof(b), "%s%d", p < 0 ? "L" : "R", std::abs(p)); return b; }

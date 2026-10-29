@@ -9,7 +9,9 @@ played as grains by a step sequencer with per-step locks on every knob.
   start inside it, drag the S / E flags to set START and END.
 - Three grain engines per track: CLASSIC (smooth time stretch and freeze), CLOUD (regular or random clouds) and LOOP
   (crossfaded loops, stacked copies); SYNC sets the grain size in note values.
-- 6 voices per track. Knob pages: SOURCE (START, END, POSITION, SLICE, SCAN, SPRAY, PITCH, PITCH MIX), GRAIN (SIZE,
+- 6 voices per track, an arpeggiator per track (11 modes, rate, octaves, gate, length, swing, repeat, latch), a filter
+  page (6 types, own envelope, key tracking, low cut), a NOTES page (grains playing random or ordered notes of a scale),
+  a SAMPLE / GRAINS mix fader. Earlier knob pages: SOURCE (START, END, POSITION, SLICE, SCAN, SPRAY, PITCH, PITCH MIX), GRAIN (SIZE,
   DENSITY, SHAPE, SPREAD, JITTER, REVERSE, OCTAVE, FINE), AMP (ATTACK, DECAY, SUSTAIN, RELEASE, VOLUME, PAN), FX (FILTER,
   RESO, FLT ENV, LOW CUT and the sends DELAY, REVERB, CHORUS, CHAOS), LFO 1 to 3 (WAVE, RATE, SYNC, DEPTH, DEST, TRIG); GRAIN MIX
   blends the sample played straight with the grains. SCAN at the centre

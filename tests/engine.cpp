@@ -467,11 +467,12 @@ int main()
         for (int i = 0; i < 96000; ++i) saw->pcm.push_back(0.4f * (float)(2.0 * std::fmod(i * 220.0 / 48000.0, 1.0) - 1.0));
         auto e = make(saw.get());
         e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
-        e->trackParam[0][tpFILTER] = 30.f; e->trackParam[0][tpFLTENV] = 127.f;
-        e->trackParam[0][tpDECAY] = 50.f; e->trackParam[0][tpSUSTAIN] = 30.f;
+        e->trackParam[0][tpFTYPE] = binKnob(ftLP12, kFilterTypes); e->trackParam[0][tpCUTOFF] = 40.f; e->trackParam[0][tpFLTENV] = 127.f;
+        e->trackParam[0][tpFATK] = 0.f; e->trackParam[0][tpFDEC] = 100.f;
         Run r = render(*e, 48000);
         auto bright = [&](int a, int b) { double d = 0, s2 = 0; for (int i = a + 1; i < b; ++i) { const double x = r.L[i] - r.L[i - 1]; d += x * x; s2 += r.L[i] * r.L[i]; } return d / (s2 + 1e-12); };
-        check(bright(300, 2000) > 2.0 * bright(30000, 40000), "FLT ENV opens the low pass at the attack");
+        std::printf("     fenv bright %.5f %.5f\n", bright(300, 2000), bright(30000, 40000));
+        check(bright(300, 2000) > 2.0 * bright(30000, 40000), "the filter envelope opens the low pass at the attack, then closes");
     }
     {   // effects at their extremes and the master section: finite, bounded, and the echo / reverb really return
         auto e = make(material(2).get());
@@ -572,6 +573,63 @@ int main()
         Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.note[0][0] = kBaseNote + 1;
         Run r = render(*e, 24000);
         check(std::fabs(zcHz(r.L, 4000, 24000) - 440.f) < 15.f, "SCALE MAJOR: a C# step plays C (the sample's pitch)");
+    }
+    {   // 0.7: filter types: a 2 kHz high pass 24 dB removes a 220 Hz saw's fundamental, a low pass 24 dB at 300 Hz its highs
+        auto saw = std::make_shared<SampleData>(); saw->sr = 48000;
+        for (int i = 0; i < 96000; ++i) saw->pcm.push_back(0.4f * (float)(2.0 * std::fmod(i * 220.0 / 48000.0, 1.0) - 1.0));
+        auto bandAt2 = [](const std::vector<float>& x, double f0) { double re = 0, im = 0; for (int i = 8000; i < 24000; ++i) { const double w = 6.283185307 * f0 * i / 48000.0; re += x[i] * std::cos(w); im += x[i] * std::sin(w); } return std::sqrt(re * re + im * im); };
+        auto run = [&](int type, float cut) { auto e = make(saw.get()); e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->trackParam[0][tpSCAN] = 64.f;
+                                             e->trackParam[0][tpFTYPE] = binKnob(type, kFilterTypes); e->trackParam[0][tpCUTOFF] = cut; return render(*e, 24000); };
+        Run open = run(ftLP24, 127.f), hp = run(ftHP24, 127.f * std::log(100.f) / std::log(1000.f)), lp = run(ftLP24, 127.f * std::log(15.f) / std::log(1000.f));
+        check(bandAt2(hp.L, 220.0) < 0.05 * bandAt2(open.L, 220.0) && bandAt2(lp.L, 2200.0) < 0.05 * bandAt2(open.L, 2200.0), "filter types: HP 24 and LP 24 cut where they should");
+    }
+    {   // 0.7: NOTES: with a MAJOR scale and NOTES full, grains take notes of the scale over one octave (not only the root)
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->bank.kit[0].mode = gmCloud;
+        e->trackParam[0][tpNSCALE] = binKnob(2, kScales + 1); e->trackParam[0][tpNAMOUNT] = 127.f; e->trackParam[0][tpDENSITY] = 110.f;
+        render(*e, 24000);
+        GrainView g[kViewGrains]; VoiceView vv[8]; int nv = 0; bool seen[13] = {}, outside = false;
+        for (int r = 0; r < 20; ++r) {
+            render(*e, 2400);
+            const int n = e->grainView(0, g, kViewGrains, vv, 8, nv);
+            for (int i = 0; i < n; ++i) { const int st = (int)std::lround(g[i].semis); if (st >= 0 && st <= 12) { seen[st] = true; if (!inScale(60 + st, 0, 1)) outside = true; } }
+        }
+        int distinct = 0; for (bool b : seen) distinct += b;
+        check(distinct >= 5 && !outside, "NOTES: grains play several notes of the scale, none outside it");
+        e->trackParam[0][tpNORDER] = binKnob(2, kNOrders); e->trackParam[0][tpNRANGE] = 0.f;     // UP: walks the scale
+        check(nOrderOf(e->trackParam[0][tpNORDER]) == 2, "NOTES ORDER knob");
+    }
+    {   // 0.7: ARP UP over a held C major chord: notes C E G C E G..., one per 16th
+        auto e = make(s440.get()); e->global[gPLAY] = 0.f;
+        e->trackParam[0][tpAMODE] = binKnob(amUp, kArpModes); e->trackParam[0][tpARATE] = binKnob(8, kArpRates);
+        e->trackParam[0][tpAGATE] = 30.f; e->trackParam[0][tpRELEASE] = 0.f;
+        std::vector<float> L(256), R(256);
+        NoteIn ch[3] = {{0, 0, 60, 1.f, true}, {0, 0, 64, 1.f, true}, {0, 0, 67, 1.f, true}};
+        e->process(L.data(), R.data(), 256, Transport(), ch, 3);
+        std::vector<int> heard;
+        for (int p = 0; p < 6000 * 7; p += 256) {
+            e->process(L.data(), R.data(), 256, Transport());
+            GrainView g[kViewGrains]; VoiceView vv[8]; int nv = 0; e->grainView(0, g, kViewGrains, vv, 8, nv);
+            int newest = -1; for (int i = 0; i < nv; ++i) if (!vv[i].released) newest = vv[i].note;
+            if (newest >= 0 && (heard.empty() || heard.back() != newest)) heard.push_back(newest);
+        }
+        std::printf("     arp:"); for (int n : heard) std::printf(" %d", n); std::printf("\n");
+        check(heard.size() >= 6 && heard[0] == 60 && heard[1] == 64 && heard[2] == 67 && heard[3] == 60, "ARP UP: C E G C ... from a held chord");
+        NoteIn off[3] = {{0, 0, 60, 0.f, false}, {0, 0, 64, 0.f, false}, {0, 0, 67, 0.f, false}};
+        e->process(L.data(), R.data(), 256, Transport(), off, 3);
+        for (int p = 0; p < 12000; p += 256) e->process(L.data(), R.data(), 256, Transport());
+        check(e->activeVoices(0) == 0, "ARP: stops when the keys are released (no LATCH)");
+    }
+    {   // 0.7: VELOCITY: a soft key is quieter with VELOCITY up
+        auto e = make(s440.get()); e->global[gPLAY] = 0.f; e->trackParam[0][tpVELSENS] = 127.f;
+        std::vector<float> L(24064), R(24064);
+        NoteIn on{0, 0, 60, 0.25f, true}; e->process(L.data(), R.data(), 256, Transport(), &on, 1);
+        for (int p = 256; p < 24000; p += 256) e->process(L.data() + p, R.data() + p, 256, Transport());
+        auto f = make(s440.get()); f->global[gPLAY] = 0.f; f->trackParam[0][tpVELSENS] = 0.f;
+        std::vector<float> L2(24064), R2(24064);
+        f->process(L2.data(), R2.data(), 256, Transport(), &on, 1);
+        for (int p = 256; p < 24000; p += 256) f->process(L2.data() + p, R2.data() + p, 256, Transport());
+        check(rms(L, 6000, 24000) < 0.4f * rms(L2, 6000, 24000), "VELOCITY: soft notes are quieter");
     }
     {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());

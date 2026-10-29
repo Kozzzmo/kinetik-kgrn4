@@ -89,7 +89,7 @@ static constexpr int kKitTouched = 1000;   // applyCommand: a kit changed
 
 inline std::string serializeBank(const Bank& b)
 {
-    std::string s = "KGRN45\n";
+    std::string s = "KGRN46\n";
     char buf[200];
     for (int t = 0; t < kTracks; ++t) {
         const Kit& k = b.kit[t];
@@ -200,56 +200,110 @@ inline int applyCommand(Bank& b, const char* line)
     return -1;
 }
 
-// older banks: the locks move to the knobs' new places (0.2 = 16 knobs "KGRN41", 0.3 = 20 knobs "KGRN42/43");
-// a PITCH lock of 0.2 / 0.3 becomes the step's note (notes are what the sequencer plays now)
-static const int kKnobs03[20] = {tpPOSITION, tpSLICE, tpSCAN, tpSPRAY, tpPITCH, tpSIZE, tpDENSITY, tpSHAPE, tpJITTER, tpREVERSE,
-                                 tpOCTAVE, tpSPREAD, tpFILTER, tpRESO, tpATTACK, tpDECAY, tpVOLUME, tpPAN, tpDELAY, tpREVERB};
-static const int kKnobs02[16] = {tpPOSITION, tpSLICE, tpSCAN, tpPITCH, tpSIZE, tpDENSITY, tpSPRAY, tpSPREAD,
-                                 tpATTACK, tpDECAY, tpFILTER, tpRESO, tpVOLUME, tpPAN, tpDELAY, tpREVERB};
-inline void convertOldLock(std::string& line, int version)
-{
-    int p, t, st, k, val;
-    if (line.rfind("k ", 0) != 0 || std::sscanf(line.c_str() + 2, "%d %d %d %d %d", &p, &t, &st, &k, &val) != 5) return;
-    const int n = version == 1 ? 16 : 20;
-    if (k < 0 || k >= n) { line.clear(); return; }
-    const int to = version == 1 ? kKnobs02[k] : kKnobs03[k];
-    char b[80];
-    if (to == tpPITCH && val != 255) { std::snprintf(b, sizeof(b), "N %d %d %d %d %d 0 0 0", p, t, st, kBaseNote + pitchSemis((float)val), kGateHold); line = b; return; }
-    if (to == tpDECAY && val != 255) { std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, tpRELEASE, val >= 127 ? 60 : val); line = b; return; }
-    std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, to, val); line = b;
-}
-// 0.4 (40 knobs per track, 2 LFOs, "KGRN44") -> 0.5 (50 knobs, 3 LFOs); an LFO DEST value is moved to the same knob
-static const int kKnobs04[40] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE,
-                                 tpVOLUME, tpPAN, tpFILTER, tpRESO, tpFLTENV, tpDRIVE, tpDELAY, tpREVERB,
-                                 tpL1WAVE, tpL1RATE, tpL1SYNC, tpL1DEPTH, tpL1DEST, tpL1TRIG, tpL2WAVE, tpL2RATE, tpL2SYNC, tpL2DEPTH, tpL2DEST, tpL2TRIG};
-inline int convertDest04(int v)          // an LFO DEST knob value of 0.4 (29 bins: none + 28 knobs)
+// ---- older banks. Every old lock is first moved to the 0.5 layout (50 knobs), then to the current one (0.7: 69 knobs,
+// the bipolar FILTER of 0.4 / 0.5 becomes a filter TYPE + CUTOFF)
+enum Knob05 { o5START = 0, o5END, o5POSITION, o5SLICE, o5SCAN, o5SPRAY, o5PITCH, o5PMIX, o5SIZE, o5DENSITY, o5SHAPE, o5SPREAD,
+              o5JITTER, o5REVERSE, o5OCTAVE, o5FINE, o5ATTACK, o5DECAY, o5SUSTAIN, o5RELEASE, o5GMIX, o5DRIVE, o5VOLUME, o5PAN,
+              o5FILTER, o5RESO, o5FLTENV, o5LOWCUT, o5DELAY, o5REVERB, o5CHORUS, o5CHAOS, o5L1WAVE, o5Count = 50 };
+static const int kKnobs03[20] = {o5POSITION, o5SLICE, o5SCAN, o5SPRAY, o5PITCH, o5SIZE, o5DENSITY, o5SHAPE, o5JITTER, o5REVERSE,
+                                 o5OCTAVE, o5SPREAD, o5FILTER, o5RESO, o5ATTACK, o5DECAY, o5VOLUME, o5PAN, o5DELAY, o5REVERB};
+static const int kKnobs02[16] = {o5POSITION, o5SLICE, o5SCAN, o5PITCH, o5SIZE, o5DENSITY, o5SPRAY, o5SPREAD,
+                                 o5ATTACK, o5DECAY, o5FILTER, o5RESO, o5VOLUME, o5PAN, o5DELAY, o5REVERB};
+// 0.4 (40 knobs, 2 LFOs) -> 0.5
+static const int kKnobs04[40] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, o5ATTACK, o5DECAY, o5SUSTAIN, o5RELEASE,
+                                 o5VOLUME, o5PAN, o5FILTER, o5RESO, o5FLTENV, o5DRIVE, o5DELAY, o5REVERB,
+                                 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43};
+inline int convertDest04(int v)          // an LFO DEST value of 0.4 (29 bins: none + 28 knobs) -> 0.5 (33 bins)
 {
     const int d = clampi((int)(v * 29 / 128), 0, 28);
     if (d == 0) return 0;
-    return clampi((int)std::lround(lfoDestKnob(kKnobs04[d - 1] + 1)), 0, 127);
+    return clampi((int)std::lround((kKnobs04[d - 1] + 1 + 0.5f) * 128.f / 33.f), 0, 127);
 }
-inline int convertKnob04(int k, int v) { const int to = kKnobs04[k]; return (to == tpL1DEST || to == tpL2DEST) ? convertDest04(v) : v; }
-inline void convertLock04(std::string& line)
+inline int convertKnob04(int k, int v) { const int to = kKnobs04[k]; return (to == 36 || to == 42) ? convertDest04(v) : v; }
+// 0.5 -> 0.7
+static const int kKnobs05[o5Count] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                                      tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE, tpGMIX, tpDRIVE, tpVOLUME, tpPAN,
+                                      tpCUTOFF, tpRESO, tpFLTENV, tpLOWCUT, tpDELAY, tpREVERB, tpCHORUS, tpCHAOS,
+                                      tpL1WAVE, tpL1RATE, tpL1SYNC, tpL1DEPTH, tpL1DEST, tpL1TRIG, tpL2WAVE, tpL2RATE, tpL2SYNC, tpL2DEPTH, tpL2DEST, tpL2TRIG,
+                                      tpL3WAVE, tpL3RATE, tpL3SYNC, tpL3DEPTH, tpL3DEST, tpL3TRIG};
+inline int convertDest05(int v)          // an LFO DEST value of 0.5 (33 bins) -> now
+{
+    const int d = clampi((int)(v * 33 / 128), 0, 32);
+    if (d == 0) return 0;
+    return clampi((int)std::lround(lfoDestKnob(kKnobs05[d - 1] + 1)), 0, 127);
+}
+// the bipolar FILTER of 0.4 / 0.5 (left = low pass, right = high pass, centre = off) as TYPE + CUTOFF
+inline void convertFilter05(int v, int& type, int& cutoff)
+{
+    if (std::abs(v - 64) < 1) { type = (int)binKnob(ftLP24, kFilterTypes); cutoff = 127; return; }
+    const float hz = v < 64 ? 20000.f * std::pow(80.f / 20000.f, (64.f - v) / 64.f) : 20.f * std::pow(400.f, (v - 64.f) / 63.f);
+    type = (int)binKnob(v < 64 ? ftLP12 : ftHP12, kFilterTypes);
+    cutoff = clampi((int)std::lround(127.f * std::log(std::max(20.f, hz) / 20.f) / std::log(1000.f)), 0, 127);
+}
+// a knob of the 0.5 layout with its value -> the knobs now (one, or TYPE + CUTOFF for the old FILTER); returns how many
+inline int convertKnob05(int k, int v, int* outK, int* outV)
+{
+    if (k < 0 || k >= o5Count) return 0;
+    if (k == o5FILTER) { int ty, cu; convertFilter05(v, ty, cu); outK[0] = tpFTYPE; outV[0] = ty; outK[1] = tpCUTOFF; outV[1] = cu; return 2; }
+    outK[0] = kKnobs05[k];
+    outV[0] = (k == 36 || k == 42 || k == 48) && v != 255 ? convertDest05(v) : v;
+    return 1;
+}
+inline std::string lockLines05(int p, int t, int st, int k5, int val)
+{
+    if (val == 255) {                                      // a cleared lock (old commands only)
+        char b[64]; std::snprintf(b, sizeof(b), "k %d %d %d %d 255", p, t, st, k5 >= 0 && k5 < o5Count ? kKnobs05[k5] : 0); return b;
+    }
+    int ks[2], vs[2]; const int n = convertKnob05(k5, val, ks, vs);
+    std::string r; char b[64];
+    for (int i = 0; i < n; ++i) { std::snprintf(b, sizeof(b), "%sk %d %d %d %d %d", i ? "\n" : "", p, t, st, ks[i], vs[i]); r += b; }
+    return r;
+}
+// one line of an old bank -> line(s) of the current format (version 1 = 0.2, 2 = 0.3, 3 = 0.4, 4 = 0.5 / 0.6)
+inline void convertOldLine(std::string& line, int version)
 {
     int p, t, st, k, val;
     if (line.rfind("k ", 0) != 0 || std::sscanf(line.c_str() + 2, "%d %d %d %d %d", &p, &t, &st, &k, &val) != 5) return;
-    if (k < 0 || k >= 40) { line.clear(); return; }
-    char b[80]; std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, kKnobs04[k], val == 255 ? 255 : convertKnob04(k, val)); line = b;
+    char b[80];
+    int k5 = -1;
+    if (version <= 2) {
+        const int n = version == 1 ? 16 : 20;
+        if (k < 0 || k >= n) { line.clear(); return; }
+        k5 = version == 1 ? kKnobs02[k] : kKnobs03[k];
+        // a PITCH lock of 0.2 / 0.3 becomes the step's note (notes are what the sequencer plays now), DECAY -> RELEASE
+        if (k5 == o5PITCH && val != 255) { std::snprintf(b, sizeof(b), "N %d %d %d %d %d 0 0 0", p, t, st, kBaseNote + pitchSemis((float)val), kGateHold); line = b; return; }
+        if (k5 == o5DECAY && val != 255) { k5 = o5RELEASE; if (val >= 127) val = 60; }
+    } else if (version == 3) {
+        if (k < 0 || k >= 40) { line.clear(); return; }
+        k5 = kKnobs04[k]; if (val != 255) val = convertKnob04(k, val);
+    } else {
+        if (k < 0 || k >= o5Count) { line.clear(); return; }
+        k5 = k;
+    }
+    line = lockLines05(p, t, st, k5, val);
 }
 inline bool deserializeBank(Bank& b, const char* text)
 {
     if (!text || std::strncmp(text, "KGRN4", 5) != 0) return false;
-    const int version = std::strncmp(text, "KGRN41", 6) == 0 ? 1 : (std::strncmp(text, "KGRN42", 6) == 0 || std::strncmp(text, "KGRN43", 6) == 0 ? 2
-                      : (std::strncmp(text, "KGRN44", 6) == 0 ? 3 : 4));
+    int version = 5;                                       // KGRN46 = now
+    if (!std::strncmp(text, "KGRN41", 6)) version = 1;
+    else if (!std::strncmp(text, "KGRN42", 6) || !std::strncmp(text, "KGRN43", 6)) version = 2;
+    else if (!std::strncmp(text, "KGRN44", 6)) version = 3;
+    else if (!std::strncmp(text, "KGRN45", 6)) version = 4;
     b.initDefault();
     const char* s = text; std::string line;
     while (*s) {
         const char* e = std::strchr(s, '\n');
         const size_t n = e ? (size_t)(e - s) : std::strlen(s);
         line.assign(s, n);
-        if (version < 3) convertOldLock(line, version);
-        else if (version == 3) convertLock04(line);
-        if (!line.empty() && line.rfind("KGRN", 0) != 0) applyCommand(b, line.c_str());
+        if (version < 5) convertOldLine(line, version);
+        size_t a = 0;                                      // a converted line can hold several
+        while (a < line.size()) {
+            size_t z = line.find('\n', a); if (z == std::string::npos) z = line.size();
+            const std::string one = line.substr(a, z - a);
+            if (!one.empty() && one.rfind("KGRN", 0) != 0) applyCommand(b, one.c_str());
+            a = z + 1;
+        }
         s += n; if (*s == '\n') ++s;
     }
     if (version < 3)                                       // before 0.4 a note lasted until the next one
