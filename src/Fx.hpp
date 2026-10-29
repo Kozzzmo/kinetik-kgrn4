@@ -7,10 +7,18 @@
 namespace kn {
 
 struct PingPong {
-    std::vector<float> l, r; int w = 0; double time = 1000; float fb = 0.5f; OnePole lpL, lpR; float sr = 48000.f; int quiet = 0;
-    void init(float sampleRate) { sr = sampleRate; l.assign((size_t)(sr * 4.5f), 0.f); r.assign(l.size(), 0.f); lpL.setLP(5000.f, sr); lpR.setLP(5000.f, sr); clear(); }
-    void clear() { std::fill(l.begin(), l.end(), 0.f); std::fill(r.begin(), r.end(), 0.f); w = 0; quiet = 1 << 30; }
-    void set(float timeKnob, float fbKnob, double spb) { time = std::min((double)l.size() - 4.0, std::max(16.0, kDelTime[bin8(timeKnob)] * spb)); fb = fbKnob / 127.f * 0.92f; }
+    std::vector<float> l, r; int w = 0; double time = 1000; float fb = 0.5f; OnePole lpL, lpR, hpL, hpR; float sr = 48000.f; int quiet = 0;
+    float width = 1.f;
+    void init(float sampleRate) { sr = sampleRate; l.assign((size_t)(sr * 4.5f), 0.f); r.assign(l.size(), 0.f); lpL.setLP(5000.f, sr); lpR.setLP(5000.f, sr); hpL.setLP(60.f, sr); hpR.setLP(60.f, sr); clear(); }
+    void clear() { std::fill(l.begin(), l.end(), 0.f); std::fill(r.begin(), r.end(), 0.f); w = 0; quiet = 1 << 30; hpL.y = hpR.y = lpL.y = lpR.y = 0.f; }
+    // 0.4: HIGH CUT / LOW CUT in the repeats, WIDTH (0 = mono .. 64 = ping-pong .. 127 = wider)
+    void set(float timeKnob, float fbKnob, double spb, float hiCut = 96.f, float loCut = 20.f, float widthKnob = 110.f)
+    {
+        time = std::min((double)l.size() - 4.0, std::max(16.0, kDelTime[bin8(timeKnob)] * spb)); fb = fbKnob / 127.f * 0.92f;
+        lpL.setLP(cutHz(hiCut, 800.f, 18000.f), sr); lpR.a = lpL.a;
+        hpL.setLP(cutHz(loCut, 20.f, 2000.f), sr); hpR.a = hpL.a;
+        width = widthKnob / 64.f;
+    }
     bool asleep() const { return quiet > (int)l.size(); }
     inline void process(float inL, float inR, float& outL, float& outR)
     {
@@ -19,10 +27,13 @@ struct PingPong {
         double pos = (double)w - time; if (pos < 0) pos += l.size();
         const size_t i0 = (size_t)pos % l.size(), i1 = (i0 + 1) % l.size(); const float fr = (float)(pos - std::floor(pos));
         const float el = l[i0] + (l[i1] - l[i0]) * fr, er = r[i0] + (r[i1] - r[i0]) * fr;
-        l[(size_t)w] = (inL + inR) * 0.5f + lpR.lp(er) * fb;        // mono in on the left, cross feedback = ping-pong
-        r[(size_t)w] = lpL.lp(el) * fb;
+        float fl = lpL.lp(el), fr2 = lpR.lp(er);
+        fl -= hpL.lp(fl); fr2 -= hpR.lp(fr2);
+        l[(size_t)w] = (inL + inR) * 0.5f + fr2 * fb;        // mono in on the left, cross feedback = ping-pong
+        r[(size_t)w] = fl * fb;
         if (++w >= (int)l.size()) w = 0;
-        outL = el; outR = er;
+        const float m = 0.5f * (el + er), sd = 0.5f * (el - er) * width;
+        outL = m + sd; outR = m - sd;
         if (std::fabs(el) + std::fabs(er) < 1e-6f) ++quiet; else quiet = 0;
     }
 };
@@ -35,13 +46,15 @@ struct Reverb {
     int quiet = 1 << 30;
     // 0.4: input diffusion (smears the attacks: no flutter) and two slowly modulated lines (no metallic ringing)
     struct Ap { std::vector<float> b; int w = 0; float g = 0.7f; inline float tick(float x) { const float d = b[(size_t)w]; const float y = -g * x + d; b[(size_t)w] = x + g * y; if (++w >= (int)b.size()) w = 0; return y; } };
-    Ap dif[4], difS[2]; float mph = 0.f, mdepth = 8.f;
+    Ap dif[4], difS[2]; float mph = 0.f, mdepth = 8.f, width = 1.f;
+    // 0.4: PRE-DELAY 0 .. 200 ms, WIDTH 0 = mono .. 127 = wider than the room
+    void setSpace(float preKnob, float widthKnob) { preLen = std::max(1, std::min((int)pre.size() - 1, (int)(preKnob / 127.f * 0.2f * sr))); width = widthKnob / 80.f; }
     void init(float sampleRate)
     {
         sr = sampleRate;
         static const float ms[kLines] = {29.7f, 37.1f, 41.1f, 43.7f, 53.3f, 59.9f, 67.7f, 73.1f};
         for (int i = 0; i < kLines; ++i) { len[i] = std::max(8, (int)(ms[i] * 0.001f * sr * 1.6f)); buf[i].assign((size_t)len[i], 0.f); }
-        pre.assign((size_t)(0.02f * sr) + 2, 0.f); preLen = (int)pre.size() - 1;
+        pre.assign((size_t)(0.25f * sr) + 2, 0.f); preLen = (int)(0.02f * sr);
         static const float dms[4] = {4.77f, 3.59f, 12.73f, 9.31f}, sms[2] = {5.3f, 7.9f};
         for (int i = 0; i < 4; ++i) { dif[i].b.assign((size_t)std::max(2, (int)(dms[i] * 0.001f * sr)), 0.f); dif[i].g = i < 2 ? 0.75f : 0.625f; }
         for (int i = 0; i < 2; ++i) { difS[i].b.assign((size_t)std::max(2, (int)(sms[i] * 0.001f * sr)), 0.f); difS[i].g = 0.6f; }
@@ -69,7 +82,8 @@ struct Reverb {
         if (inL != 0.f || inR != 0.f) quiet = 0;
         if (asleep()) { outL = outR = 0.f; return; }
         // pre-delay (mono)
-        pre[(size_t)pw] = (inL + inR) * 0.5f; float x = pre[(size_t)((pw + 1) % (preLen + 1))]; pw = (pw + 1) % (preLen + 1);
+        const int pn = (int)pre.size();
+        pre[(size_t)pw] = (inL + inR) * 0.5f; float x = pre[(size_t)((pw - preLen + pn) % pn)]; pw = (pw + 1) % pn;
         float side = (inL - inR) * 0.5f;
         for (auto& a : dif) x = a.tick(x);
         for (auto& a : difS) side = a.tick(side);
@@ -97,9 +111,31 @@ struct Reverb {
             buf[i][(size_t)pos[i]] = y + in * 0.35f;
             if (++pos[i] >= len[i]) pos[i] = 0;
         }
-        outL = (o[0] + o[2] + o[4] + o[6]) * 0.5f;
-        outR = (o[1] + o[3] + o[5] + o[7]) * 0.5f;
+        const float ol = (o[0] + o[2] + o[4] + o[6]) * 0.5f, orr = (o[1] + o[3] + o[5] + o[7]) * 0.5f;
+        const float m = 0.5f * (ol + orr), sd = 0.5f * (ol - orr) * width;
+        outL = m + sd; outR = m - sd;
         if (std::fabs(outL) + std::fabs(outR) < 1e-6f) ++quiet; else quiet = 0;
+    }
+};
+
+// master chorus: two modulated delays in quadrature, mixed with the dry sound
+struct Chorus {
+    std::vector<float> bl, br; int w = 0; float ph = 0.f, inc = 0.f, depth = 0.f, mix = 0.f, sr = 48000.f;
+    void init(float s) { sr = s; bl.assign((size_t)(0.06f * s), 0.f); br.assign(bl.size(), 0.f); w = 0; }
+    void clear() { std::fill(bl.begin(), bl.end(), 0.f); std::fill(br.begin(), br.end(), 0.f); }
+    void set(float rateK, float depthK, float mixK) { inc = 0.05f * std::pow(100.f, rateK / 127.f) / sr; depth = depthK / 127.f * 0.006f * sr; mix = mixK / 127.f; }
+    inline float rd(const std::vector<float>& b, float d) const { float p = (float)w - d; const float n = (float)b.size(); while (p < 0.f) p += n; const int i = (int)p; const float f = p - i; return b[(size_t)i % b.size()] * (1.f - f) + b[(size_t)(i + 1) % b.size()] * f; }
+    inline void process(float& l, float& r)
+    {
+        if (mix < 0.001f) return;
+        bl[(size_t)w] = l; br[(size_t)w] = r;
+        ph += inc; if (ph >= 1.f) ph -= 1.f;
+        const float base = 0.012f * sr;
+        const float dl = base + depth * (0.5f + 0.5f * std::sin(kTwoPi * ph)), dr = base + depth * (0.5f + 0.5f * std::cos(kTwoPi * ph));
+        const float wl = rd(bl, dl), wr = rd(br, dr);
+        if (++w >= (int)bl.size()) w = 0;
+        l += (wl - l) * mix * 0.5f; r += (wr - r) * mix * 0.5f;
+        l += wr * mix * 0.25f; r += wl * mix * 0.25f;      // a little cross: width
     }
 };
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0
+
+- Polyphony: 6 voices per track, each with its own envelope (ATTACK DECAY SUSTAIN RELEASE) and filter moved by FLT ENV;
+  the oldest note is taken when a seventh starts.
+- New interface in the spirit of the other Kinetik sequencers: track tabs (SOLO / MUTE), one display per track (waveform
+  with START / END flags, slices, POSITION and the play head of every voice), knob pages SOURCE / GRAIN / AMP / FX /
+  LFO 1 / LFO 2, effect tabs, and a single-track sequencer with lanes TRIG / NOTE / LEN / CHORD / RATCH / COND and an
+  on-screen keyboard.
+- Steps play notes (C3 = the sample's own pitch), chords, note lengths (up to HOLD), ratchets and conditions (chance,
+  FILL, first loop, every n loops). FILL (HOLD) button and MIDI B2.
+- START / END: the part of the sample (or slice) that plays. PITCH MIX: grains at the original pitch mixed with
+  transposed grains. FINE tuning, DRIVE per track.
+- Two LFOs per track (6 shapes, free or synced, retrigger) on any knob.
+- Effects extended: echo HIGH CUT / LOW CUT / WIDTH / LEVEL, reverb PRE-DELAY / WIDTH / LEVEL, master CHORUS, DRIVE,
+  LOW CUT, HIGH CUT.
+- Sound: new stereo built-in materials (PAD, BELLS, CHOIR, RAIN, PLUCKS, BEAT, DRONE, KEYS, all in C minor), pitched-up
+  grains without aliasing, a smoother reverb, livelier defaults per track, LEGATO. Factory presets redone; Grain Chords added.
+- MIDI channels 2-5 play the tracks polyphonically. Banks and presets of 0.2 / 0.3 are converted (pitch locks become step
+  notes); host automation of older projects no longer matches the knobs.
+
 ## 0.3.0
 
 - New grain engine, one MODE per track: CLASSIC (grains chained without gaps, clean time stretch and freeze), CLOUD

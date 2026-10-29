@@ -9,6 +9,7 @@
 #include <vector>
 #include <functional>
 #include <chrono>
+#include <cstring>
 using namespace kn;
 
 static int fails = 0;
@@ -44,6 +45,7 @@ static std::unique_ptr<Engine> make(const SampleData* src)
     e->global[gPLAY] = 1.f; e->global[gTEMPO] = 120.f;
     e->trackParam[0][tpSPREAD] = 0.f;              // no random detune / pan for the measurements
     e->source[0] = src;
+    for (auto& P : e->bank.patterns) std::memset(P.gate, kGateHold, sizeof(P.gate));   // notes last until the next one
     return e;
 }
 
@@ -128,10 +130,10 @@ int main()
     {   // locks: step 1 locked to +12, step 3 plain
         auto e = make(s440.get());
         Pattern& P = e->bank.patterns[0];
-        P.on[0][0] = 1; P.on[0][2] = 1; P.locks[0][0][tpPITCH] = 96;
+        P.on[0][0] = 1; P.on[0][2] = 1; P.note[0][0] = kBaseNote + 12;
         Run r = render(*e, 6000 * 4);
         const float a = zcHz(r.L, 1500, 5900), b = zcHz(r.L, 13500, 17900);
-        check(std::fabs(a - 880.f) < 60.f && std::fabs(b - 440.f) < 30.f, "a PITCH lock changes only its step");
+        check(std::fabs(a - 880.f) < 60.f && std::fabs(b - 440.f) < 30.f, "a step note +12 changes only its step");
     }
     {   // mute
         auto e = make(s440.get());
@@ -142,19 +144,19 @@ int main()
     {   // decay
         auto e = make(s440.get());
         e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
-        e->trackParam[0][tpDECAY] = 40.f;          // ~140 ms
+        e->trackParam[0][tpDECAY] = 40.f; e->trackParam[0][tpSUSTAIN] = 0.f;   // ~140 ms to nothing
         Run r = render(*e, 24000);
         check(rms(r.L, 500, 2000) > 0.02f && rms(r.L, 12000, 24000) < 1e-4f, "short DECAY ends the note");
     }
     {   // live note while stopped, note off releases a HOLD note
         auto e = make(s440.get());
         e->global[gPLAY] = 0.f;
-        NoteIn on{0, 0, 12, 1.f, true};
+        NoteIn on{0, 0, kBaseNote + 12, 1.f, true};
         std::vector<float> L(24000), R(24000);
         e->process(L.data(), R.data(), 256, Transport(), &on, 1);
         for (int p = 256; p < 12000; p += 256) e->process(L.data() + p, R.data() + p, 256, Transport());
         const float f = zcHz(L, 3000, 12000);
-        NoteIn off{0, 0, 0, 0.f, false};
+        NoteIn off{0, 0, kBaseNote + 12, 0.f, false};
         e->process(L.data() + 12000, R.data() + 12000, 256, Transport(), &off, 1);
         for (int p = 12256; p < 24000; p += 256) e->process(L.data() + p, R.data() + p, std::min(256, 24000 - p), Transport());
         check(std::fabs(f - 880.f) < 60.f, "live note +12 while stopped");
@@ -225,10 +227,10 @@ int main()
         auto e = make(s.get());
         e->bank.kit[0].legato = 1;
         Pattern& P = e->bank.patterns[0];
-        P.on[0][0] = P.on[0][4] = 1; P.len[0] = 64; P.locks[0][4][tpPITCH] = 96;
+        P.on[0][0] = P.on[0][4] = 1; P.len[0] = 64; P.note[0][4] = kBaseNote + 12;
         e->trackParam[0][tpATTACK] = 100.f;                 // a slow attack: a retrigger would dip
         Run r = render(*e, 6000 * 8);
-        check(std::fabs(zcHz(r.L, 6000 * 4 + 3000, 6000 * 6) - 880.f) < 60.f, "LEGATO: the locked pitch of step 5 plays");
+        check(std::fabs(zcHz(r.L, 6000 * 4 + 3000, 6000 * 6) - 880.f) < 60.f, "LEGATO: the note of step 5 plays");
         check(rms(r.L, 6000 * 4 + 200, 6000 * 4 + 1200) > 0.6f * rms(r.L, 6000 * 3, 6000 * 4), "LEGATO: no new attack at step 5");
     }
     // ---------------------------------------------------------------- 0.3: the new grain engine
@@ -325,7 +327,7 @@ int main()
         e->global[gPLAY] = 1.f; e->global[gTEMPO] = 120.f; e->global[gCAPLEN] = 0.f;   // 1 bar = 2 s
         e->bank.kit[0].material = kMatLive;
         e->trackParam[0][tpSPREAD] = 0.f; e->trackParam[0][tpPOSITION] = 120.f;
-        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->bank.patterns[0].gate[0][0] = kGateHold;
         std::vector<float> in(256), L(256), R(256), outAll;
         double ph = 0;
         auto feed = [&](int frames, float hz, float amp) {
@@ -363,11 +365,128 @@ int main()
         Bank d; deserializeBank(d, "KGRN41\nk 0 0 3 6 90\nk 0 0 3 15 40\n");
         check(d.patterns[0].locks[0][3][tpSPRAY] == 90 && d.patterns[0].locks[0][3][tpREVERB] == 40, "0.2 banks: SPRAY and REVERB locks found again");
     }
-    {   // CPU: four tracks, dense clouds of long grains, stereo, for 4 s
+    // ---------------------------------------------------------------- 0.4: polyphony, START / END, PITCH MIX, LFOs, steps, effects
+    auto bandAt = [](const std::vector<float>& x, int a, int b, double f0) { double re = 0, im = 0; for (int i = a; i < b; ++i) { const double w = 6.283185307 * f0 * i / 48000.0; re += x[i] * std::cos(w); im += x[i] * std::sin(w); } return std::sqrt(re * re + im * im) / (b - a); };
+    {   // a MAJ chord: three voices, C E G of a 440 Hz sine = 440, 554, 659 Hz
+        auto e = make(s440.get());
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.chord[0][0] = 1;
+        e->trackParam[0][tpSCAN] = 64.f;
+        Run r = render(*e, 24000);
+        const double a = bandAt(r.L, 6000, 24000, 440.0), b = bandAt(r.L, 6000, 24000, 554.37), c = bandAt(r.L, 6000, 24000, 659.26), off = bandAt(r.L, 6000, 24000, 500.0);
+        check(e->activeVoices(0) == 3 && a > 8 * off && b > 8 * off && c > 8 * off, "a MAJ chord plays three voices (root, third, fifth)");
+    }
+    {   // more than 6 notes: the oldest is taken (never more than 6 sounding)
+        auto e = make(s440.get());
+        e->global[gPLAY] = 0.f;
+        std::vector<float> L(256), R(256); int most = 0;
+        for (int n = 0; n < 9; ++n) { NoteIn on{0, 0, kBaseNote + n, 1.f, true}; e->process(L.data(), R.data(), 256, Transport(), &on, 1); }
+        for (int p = 0; p < 4800; p += 256) { e->process(L.data(), R.data(), 256, Transport()); most = std::max(most, e->activeVoices(0)); }
+        check(most == kVoices, "9 held notes: 6 voices sound, the oldest ones are stolen");
+    }
+    {   // START / END: a sample 220 Hz then 880 Hz; START 75% plays only the second half
+        auto two = sine(220.f, 2.f, 880.f);
+        auto e = make(two.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        e->trackParam[0][tpSTART] = 96.f; e->trackParam[0][tpSCAN] = 96.f;   // scanning: wraps inside START .. END
+        Run r = render(*e, 96000 * 2);
+        check(std::fabs(zcHz(r.L, 4000, 190000) - 880.f) < 40.f, "START 75%: only the part after START plays, even while scanning");
+        auto f = make(two.get());
+        f->bank.patterns[0].on[0][0] = 1; f->bank.patterns[0].len[0] = 64;
+        f->trackParam[0][tpEND] = 30.f; f->trackParam[0][tpSCAN] = 96.f;
+        Run q = render(*f, 96000 * 2);
+        check(std::fabs(zcHz(q.L, 4000, 190000) - 220.f) < 20.f, "END 25%: the second half never plays");
+    }
+    {   // PITCH MIX: 0 = the sample's own pitch whatever PITCH says, centre = both
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        e->trackParam[0][tpPITCH] = 96.f; e->trackParam[0][tpPMIX] = 0.f;
+        Run r = render(*e, 24000);
+        const bool orig = bandAt(r.L, 4000, 24000, 440.0) > 10 * bandAt(r.L, 4000, 24000, 880.0);
+        auto f = make(s440.get());
+        f->bank.patterns[0].on[0][0] = 1; f->bank.patterns[0].len[0] = 64; f->bank.kit[0].mode = gmCloud;
+        f->trackParam[0][tpPITCH] = 96.f; f->trackParam[0][tpPMIX] = 64.f; f->trackParam[0][tpDENSITY] = 120.f;
+        Run q = render(*f, 48000);
+        double lo = 0, hi = 0;                               // short blocks: the grains' phases are random
+        for (int a = 4000; a + 2048 <= 48000; a += 2048) { lo += bandAt(q.L, a, a + 2048, 440.0); hi += bandAt(q.L, a, a + 2048, 880.0); }
+        std::printf("     pmix: orig %d lo %.4f hi %.4f\n", (int)orig, lo, hi);
+        check(orig && lo > 0.3 * hi && hi > 0.3 * lo, "PITCH MIX: 0 = original pitch, centre = original and transposed together");
+    }
+    {   // LFO 1 on POSITION (square, 1 Hz, full depth): the play head jumps between two places
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        e->trackParam[0][tpSCAN] = 64.f; e->trackParam[0][tpPOSITION] = 64.f;
+        e->trackParam[0][lfoParam(0, 0)] = (2 + 0.5f) * 128.f / kLfoWaves;      // square
+        e->trackParam[0][lfoParam(0, 1)] = 127.f * std::log(1.f / 0.03f) / std::log(1000.f);   // 1 Hz
+        e->trackParam[0][lfoParam(0, 3)] = 124.f; e->trackParam[0][lfoParam(0, 4)] = lfoDestKnob(tpPOSITION + 1);
+        float mn = 2.f, mx = -1.f; std::vector<float> L(256), R(256);
+        for (int p = 0; p < 96000; p += 256) { e->process(L.data(), R.data(), 256, Transport()); if (e->outPos[0] >= 0.f) { mn = std::min(mn, e->outPos[0]); mx = std::max(mx, e->outPos[0]); } }
+        std::printf("     lfo: %.3f .. %.3f\n", mn, mx);
+        check(mn < 0.06f && mx > 0.94f, "LFO on POSITION moves the play head from one end to the other");
+        check(std::fabs(e->lfoValue(0, 0)) > 0.9f, "LFO value reported for the display");
+    }
+    {   // step length: gate 1 step = the note ends after ~6000 frames (+ RELEASE)
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->bank.patterns[0].gate[0][0] = 4;
+        e->trackParam[0][tpRELEASE] = 0.f;
+        Run r = render(*e, 24000);
+        check(rms(r.L, 2000, 5800) > 0.05f && rms(r.L, 8000, 24000) < 1e-4f, "LEN 1 step: the note stops at the end of its step");
+    }
+    {   // ratchets: x4 on a 1-step gate = four attacks
+        auto e = make(s440.get());
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.gate[0][0] = 2; P.ratch[0][0] = 3;   // x4, each half its slot
+        e->trackParam[0][tpRELEASE] = 0.f; e->trackParam[0][tpATTACK] = 0.f;
+        Run r = render(*e, 6000);
+        int on = 0; bool was = false;
+        for (int a = 0; a + 250 <= 6000; a += 250) { const bool snd = rms(r.L, a, a + 250) > 0.02f; if (snd && !was) ++on; was = snd; }
+        std::printf("     ratchet: %d\n", on);
+        check(on == 4, "RATCHET x4: four notes in the step");
+    }
+    {   // conditions: 1:2 plays every other loop, FILL only while FILL is held
+        auto e = make(s440.get());
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 1; P.gate[0][0] = 2; P.cond[0][0] = 11;   // 1:2, half a step
+        e->trackParam[0][tpRELEASE] = 0.f;
+        Run r = render(*e, 6000 * 4);
+        const bool alt = rms(r.L, 500, 2500) > 0.02f && rms(r.L, 6500, 8500) < 1e-3f && rms(r.L, 12500, 14500) > 0.02f && rms(r.L, 18500, 20500) < 1e-3f;
+        check(alt, "condition 1:2 plays on loops 1, 3, 5...");
+        auto f = make(s440.get());
+        Pattern& Q = f->bank.patterns[0]; Q.on[0][0] = 1; Q.len[0] = 1; Q.gate[0][0] = 2; Q.cond[0][0] = 7;   // FILL
+        f->trackParam[0][tpRELEASE] = 0.f;
+        Run a = render(*f, 12000); f->fill = true; Run b = render(*f, 12000);
+        check(rms(a.L, 0, 12000) < 1e-3f && rms(b.L, 0, 12000) > 0.02f, "condition FILL: only while FILL is held");
+    }
+    {   // SOLO: only the soloed track
+        auto e = make(s440.get());
+        e->source[1] = s440.get();
+        e->bank.patterns[0].on[0][0] = e->bank.patterns[0].on[1][0] = 1; e->bank.kit[1].solo = 1;
+        Run r = render(*e, 12000);
+        check(e->activeVoices(0) == 0 && e->activeVoices(1) == 1 && rms(r.L, 2000, 12000) > 0.02f, "SOLO: the other tracks are silent");
+    }
+    {   // the voice filter and its envelope: a low pass with FLT ENV up is brighter at the attack than later
+        auto saw = std::make_shared<SampleData>(); saw->sr = 48000;
+        for (int i = 0; i < 96000; ++i) saw->pcm.push_back(0.4f * (float)(2.0 * std::fmod(i * 220.0 / 48000.0, 1.0) - 1.0));
+        auto e = make(saw.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        e->trackParam[0][tpFILTER] = 30.f; e->trackParam[0][tpFLTENV] = 127.f;
+        e->trackParam[0][tpDECAY] = 50.f; e->trackParam[0][tpSUSTAIN] = 30.f;
+        Run r = render(*e, 48000);
+        auto bright = [&](int a, int b) { double d = 0, s2 = 0; for (int i = a + 1; i < b; ++i) { const double x = r.L[i] - r.L[i - 1]; d += x * x; s2 += r.L[i] * r.L[i]; } return d / (s2 + 1e-12); };
+        check(bright(300, 2000) > 2.0 * bright(30000, 40000), "FLT ENV opens the low pass at the attack");
+    }
+    {   // effects at their extremes and the master section: finite, bounded, and the echo / reverb really return
+        auto e = make(material(2).get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 16; e->bank.patterns[0].gate[0][0] = 1;
+        e->trackParam[0][tpDELAY] = 127.f; e->trackParam[0][tpREVERB] = 127.f;
+        for (int g : {gREV_SIZE, gREV_PRE, gREV_WIDTH, gREV_LEVEL, gDLY_FB, gDLY_WIDTH, gDLY_LEVEL, gCHO_RATE, gCHO_DEPTH, gCHO_MIX, gDRIVE, gLOWCUT}) e->global[g] = 127.f;
+        e->global[gHIGHCUT] = 0.f;
+        Run r = render(*e, 96000);
+        bool ok = true; for (float v : r.L) ok = ok && std::isfinite(v) && std::fabs(v) <= 1.5f;
+        check(ok && rms(r.L, 0, 96000) > 1e-3f, "all effects at their extremes: finite, bounded, audible");
+    }
+    {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());
         for (int t = 0; t < kTracks; ++t) {
             e->source[t] = material(t + 1).get(); e->bank.kit[t].mode = gmCloud;
-            e->bank.patterns[0].on[t][0] = 1; e->bank.patterns[0].len[t] = 64;
+            e->bank.patterns[0].on[t][0] = 1; e->bank.patterns[0].len[t] = 64; e->bank.patterns[0].chord[t][0] = 5;   // 4 voices each
             e->trackParam[t][tpSIZE] = 127.f; e->trackParam[t][tpDENSITY] = 127.f; e->trackParam[t][tpSPREAD] = 100.f;
         }
         std::vector<float> L(256), R(256);
@@ -375,7 +494,7 @@ int main()
         for (int p = 0; p < 48000 * 4; p += 256) e->process(L.data(), R.data(), 256, Transport());
         const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         std::printf("     worst case: %.1f %% of one core\n", secs / 4.0 * 100.0);
-        check(secs / 4.0 < 0.25, "worst case CPU under 25 % of a core");
+        check(secs / 4.0 < 0.4, "worst case CPU under 40 % of a core (16 voices; ~25 % measured)");
     }
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;

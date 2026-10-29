@@ -38,7 +38,7 @@ struct R {
     float cy() const { return y + h * 0.5f; }
 };
 
-enum DragKind { dkNone, dkKnob, dkGlobal, dkTempo, dkPatLen, dkSwing, dkTrackLen, dkPaint, dkWave, dkTrig, dkResize };
+enum DragKind { dkNone, dkKnob, dkGlobal, dkTempo, dkPatLen, dkSwing, dkTrackLen, dkPaint, dkWave, dkStepNote, dkStepLen, dkKey, dkFill, dkResize };
 enum Overlay { ovNone, ovPresets, ovSkins, ovSave, ovLicense, ovUpdate, ovChain };
 
 class KgrnUI : public UI
@@ -310,7 +310,7 @@ protected:
     void setParamGesture(uint32_t idx, float v) { editParameter(idx, true); setParam(idx, v); editParameter(idx, false); }
     void sendCmd(const std::string& c)
     {
-        const bool live = c.rfind("trig ", 0) == 0 || c.rfind("rel ", 0) == 0;
+        const bool live = c.rfind("trig ", 0) == 0 || c.rfind("rel ", 0) == 0 || c.rfind("fill ", 0) == 0 || c == "panic";
         if (!live) { autoSnap("edit", 0.5); applyCommand(*bank, c.c_str()); }
         setState("cmd", c.c_str());
     }
@@ -327,9 +327,9 @@ protected:
     }
     void sendPatternSettings() { char b[48]; std::snprintf(b, sizeof(b), "P %d %d %d", editPattern(), pat().length, pat().swing); sendCmd(b); }
     void sendTrackSettings(int t) { char b[48]; std::snprintf(b, sizeof(b), "L %d %d %d %d", editPattern(), t, pat().len[t], pat().speed[t]); sendCmd(b); }
-    void trigTrack(int t, bool on) { char b[32]; if (on) std::snprintf(b, sizeof(b), "trig %d 0", t); else std::snprintf(b, sizeof(b), "rel %d", t); sendCmd(b); }
+    void keyNote(int t, int n, bool on) { char b[32]; std::snprintf(b, sizeof(b), "%s %d %d", on ? "trig" : "rel", t, n); sendCmd(b); }
 
-    // ------------------------------------------------------------------ layout
+    // ------------------------------------------------------------------ layout (0.4: one track at a time, as KMSP-6 / KDSP-16)
     R logoArea() const { return {12.f, 4.f, 284.f, 50.f}; }
     R inBox() const { return {300.f, 9.f, 72.f, 40.f}; }
     R freezeBtn() const { return {376.f, 9.f, 74.f, 40.f}; }
@@ -340,63 +340,86 @@ protected:
     R playBtn() const { return {840.f, 9.f, 84.f, 40.f}; }
     R tempoBox() const { return {932.f, 9.f, 110.f, 40.f}; }
     R skinBtn() const { return {1050.f, 9.f, 116.f, 40.f}; }
-    // tracks
-    R trackBtn(int t) const { return {24.f, 68.f + t * 48.f, 166.f, 44.f}; }
-    R muteBtn(int t) const { return {194.f, 68.f + t * 48.f, 48.f, 20.f}; }
-    R trigBtn(int t) const { return {194.f, 92.f + t * 48.f, 48.f, 20.f}; }
-    // material / wave
-    R waveR() const { return {270.f, 88.f, 598.f, 128.f}; }
-    R loadBtn() const { return {270.f, 224.f, 64.f, 28.f}; }
-    R matBtn() const { return {340.f, 224.f, 136.f, 28.f}; }
-    R captureBtn() const { return {482.f, 224.f, 96.f, 28.f}; }
-    R sliceModeBtn() const { return {584.f, 224.f, 110.f, 28.f}; }
-    R amtMinus() const { return {700.f, 224.f, 24.f, 28.f}; }
-    R amtBox() const { return {726.f, 224.f, 86.f, 28.f}; }
-    R amtPlus() const { return {814.f, 224.f, 24.f, 28.f}; }
-    R modeBtn() const { return {444.f, 62.f, 120.f, 22.f}; }
-    R syncBtn() const { return {568.f, 62.f, 60.f, 22.f}; }
-    R legatoBtn() const { return {632.f, 62.f, 76.f, 22.f}; }
-    R lockClearBtn() const { return {760.f, 64.f, 108.f, 20.f}; }
-    // knobs: two rows of ten (SOURCE GRAIN / COLOUR ENV MIX), a gap between groups
-    R knobR(int k) const
-    {
-        const int row = k / 10, c = k % 10;
-        int gaps = 0; for (int g = 1; g < kGroups; ++g) if (kGroupStart[g] / 10 == row && kGroupStart[g] % 10 != 0 && c >= kGroupStart[g] % 10) ++gaps;
-        return {20.f + c * 83.f + gaps * 10.f, 288.f + row * 98.f, 82.f, 90.f};
-    }
+    // track tabs
+    R trackTab(int t) const { return {14.f + t * 289.f, 60.f, 283.f, 50.f}; }
+    R soloBtn(int t) const { const R r = trackTab(t); return {r.x + r.w - 64.f, r.y + 27.f, 28.f, 18.f}; }
+    R muteBtn(int t) const { const R r = trackTab(t); return {r.x + r.w - 32.f, r.y + 27.f, 28.f, 18.f}; }
+    // display (left)
+    R modeBtn() const { return {300.f, 122.f, 128.f, 22.f}; }
+    R syncBtn() const { return {432.f, 122.f, 60.f, 22.f}; }
+    R legatoBtn() const { return {496.f, 122.f, 76.f, 22.f}; }
+    R lockClearBtn() const { return {588.f, 122.f, 108.f, 22.f}; }
+    R waveR() const { return {20.f, 148.f, 678.f, 118.f}; }
+    R loadBtn() const { return {20.f, 272.f, 64.f, 26.f}; }
+    R matBtn() const { return {88.f, 272.f, 150.f, 26.f}; }
+    R captureBtn() const { return {242.f, 272.f, 90.f, 26.f}; }
+    R sliceModeBtn() const { return {336.f, 272.f, 112.f, 26.f}; }
+    R amtMinus() const { return {452.f, 272.f, 24.f, 26.f}; }
+    R amtBox() const { return {478.f, 272.f, 84.f, 26.f}; }
+    R amtPlus() const { return {564.f, 272.f, 24.f, 26.f}; }
+    R pageTab(int i) const { return {20.f + i * 113.f, 304.f, 109.f, 24.f}; }
+    int pageCount() const { return kPageStart[page + 1] - kPageStart[page]; }
+    R pageKnob(int i) const { return {20.f + i * 84.75f, 334.f, 84.f, 106.f}; }
+    R lfoScope() const { return {20.f + 6 * 84.75f + 6.f, 340.f, 156.f, 94.f}; }
+    // effects and patterns (right)
+    static constexpr int kFxPages = 4;
+    R fxTab(int i) const { return {720.f + i * 110.f, 122.f, 106.f, 24.f}; }
+    R fxKnob(int i) const { return {718.f + i * 74.f, 152.f, 74.f, 108.f}; }
+    R chainBtn() const { return {880.f, 272.f, 66.f, 24.f}; }
+    R patCopy() const { return {950.f, 272.f, 66.f, 24.f}; }
+    R patPaste() const { return {1020.f, 272.f, 66.f, 24.f}; }
+    R patClear() const { return {1090.f, 272.f, 68.f, 24.f}; }
+    R patBtn(int i) const { return {720.f + (i % 8) * 55.5f, 304.f + (i / 8) * 34.f, 51.f, 30.f}; }
+    R presetBtn() const { return {720.f, 378.f, 300.f, 30.f}; }
+    R saveBtn() const { return {1024.f, 378.f, 134.f, 30.f}; }
+    R undoBtn() const { return {720.f, 412.f, 214.f, 28.f}; }
+    R fillHoldBtn() const { return {938.f, 412.f, 220.f, 28.f}; }
     // sequencer
-    R stepPageBtn(int i) const { return {24.f + i * 52.f, 494.f, 48.f, 24.f}; }
-    R lenMinus() const { return {238.f, 494.f, 24.f, 24.f}; }
-    R lenBox() const { return {264.f, 494.f, 70.f, 24.f}; }
-    R lenPlus() const { return {336.f, 494.f, 24.f, 24.f}; }
-    R speedBtn() const { return {366.f, 494.f, 92.f, 24.f}; }
-    R rotL() const { return {464.f, 494.f, 26.f, 24.f}; }
-    R rotR() const { return {492.f, 494.f, 26.f, 24.f}; }
-    R fillBtn() const { return {524.f, 494.f, 54.f, 24.f}; }
-    R clearTrackBtn() const { return {582.f, 494.f, 60.f, 24.f}; }
-    R copyTrackBtn() const { return {646.f, 494.f, 58.f, 24.f}; }
-    R pasteTrackBtn() const { return {708.f, 494.f, 58.f, 24.f}; }
-    float rowY(int t) const { return 526.f + t * 42.f; }
-    R rowBtn(int t) const { return {24.f, rowY(t), 96.f, 38.f}; }
-    R stepCell(int t, int i) const { return {128.f + i * 46.f, rowY(t), 42.f, 38.f}; }
-    // right column
-    R patBtn(int i) const { return {898.f + (i % 4) * 66.f, 84.f + (i / 4) * 32.f, 60.f, 28.f}; }
-    R patCopy() const { return {898.f, 214.f, 60.f, 26.f}; }
-    R patPaste() const { return {964.f, 214.f, 60.f, 26.f}; }
-    R patClear() const { return {1030.f, 214.f, 60.f, 26.f}; }
-    R chainBtn() const { return {1096.f, 214.f, 60.f, 26.f}; }
-    R gKnob(int i) const { return i < 3 ? R{892.f + i * 90.f, 276.f, 90.f, 120.f} : R{937.f + (i - 3) * 90.f, 392.f, 90.f, 120.f}; }
-    R presetName() const { return {898.f, 526.f, 258.f, 40.f}; }
-    R presetBtn() const { return {898.f, 574.f, 258.f, 34.f}; }
-    R saveBtn() const { return {898.f, 614.f, 258.f, 34.f}; }
-    R undoBtn() const { return {898.f, 660.f, 258.f, 34.f}; }
+    enum Lane { lnTrig, lnNote, lnLen, lnChord, lnRatch, lnCond, kLanes };
+    R laneBtn(int i) const { return {20.f + i * 70.f, 460.f, 66.f, 24.f}; }
+    R stepPageBtn(int i) const { return {446.f + i * 30.f, 460.f, 26.f, 24.f}; }
+    R lenMinus() const { return {572.f, 460.f, 22.f, 24.f}; }
+    R lenBox() const { return {596.f, 460.f, 60.f, 24.f}; }
+    R lenPlus() const { return {658.f, 460.f, 22.f, 24.f}; }
+    R speedBtn() const { return {686.f, 460.f, 92.f, 24.f}; }
+    R rotL() const { return {782.f, 460.f, 24.f, 24.f}; }
+    R rotR() const { return {808.f, 460.f, 24.f, 24.f}; }
+    R clearTrackBtn() const { return {838.f, 460.f, 62.f, 24.f}; }
+    R copyTrackBtn() const { return {904.f, 460.f, 62.f, 24.f}; }
+    R pasteTrackBtn() const { return {970.f, 460.f, 62.f, 24.f}; }
+    R lockClrAll() const { return {1036.f, 460.f, 62.f, 24.f}; }
+    R allOnBtn() const { return {1102.f, 460.f, 58.f, 24.f}; }
+    R stepCell(int i) const { return {20.f + i * 71.5f, 490.f, 67.f, 80.f}; }
+    // keyboard
+    static constexpr int kKbOctaves = 3;
+    R octDown() const { return {20.f, 580.f, 30.f, 124.f}; }
+    R octBox() const { return {54.f, 580.f, 64.f, 124.f}; }
+    R octUp() const { return {122.f, 580.f, 30.f, 124.f}; }
+    int kbLow() const { return 12 * (kbOct + 2); }
+    static bool isBlack(int n) { const int k = n % 12; return k == 1 || k == 3 || k == 6 || k == 8 || k == 10; }
+    R keyRect(int n) const
+    {
+        const float x0 = 162.f, kw = 33.f, y = 580.f, h = 124.f;
+        int wi = 0; for (int m = kbLow(); m < n; ++m) if (!isBlack(m)) ++wi;
+        if (!isBlack(n)) return {x0 + wi * kw, y, kw - 2.f, h};
+        return {x0 + wi * kw - kw * 0.32f, y, kw * 0.62f, h * 0.6f};
+    }
+    int keyAt(float x, float y) const
+    {
+        const int lo = kbLow(), hi = lo + 12 * kKbOctaves;
+        for (int n = lo; n <= hi; ++n) if (isBlack(n) && keyRect(n).in(x, y)) return n;
+        for (int n = lo; n <= hi; ++n) if (!isBlack(n) && keyRect(n).in(x, y)) return n;
+        return -1;
+    }
+    R notesOffBtn() const { return {900.f, 674.f, 260.f, 30.f}; }
     R gripR() const { return {W - 22.f, H - 22.f, 22.f, 22.f}; }
     // overlays
     R viewBox() const { return {240.f, 96.f, 700.f, 520.f}; }
     R skinRow(int i) const { return {264.f + (i % 2) * 330.f, 150.f + (i / 2) * 148.f, 316.f, 136.f}; }
     R zoomBtn(int i) const { return {264.f + i * 109.f, 486.f, 101.f, 36.f}; }
     R presetsBox() const { return {80.f, 60.f, 1020.f, 600.f}; }
-    R presetItem(int col, int row) const { return {100.f + col * 500.f, 130.f + row * 30.f, 480.f, 27.f}; }
+    R presetItem(int col, int row) const { return {100.f + col * 500.f, 130.f + row * 24.5f, 480.f, 22.5f}; }
+    static constexpr int kPresetRows = 19;
     R presetsClose() const { return {980.f, 606.f, 100.f, 36.f}; }
     R saveBox() const { return {290.f, 200.f, 600.f, 270.f}; }
     R saveField() const { return {320.f, 290.f, 540.f, 52.f}; }
@@ -413,7 +436,6 @@ protected:
     R updMain() const { return {320.f, 456.f, 250.f, 40.f}; }
     R updSkip() const { return {580.f, 456.f, 150.f, 40.f}; }
     R updClose() const { return {740.f, 456.f, 120.f, 40.f}; }
-
     // ------------------------------------------------------------------ main draw
     void onNanoDisplay() override
     {
@@ -427,10 +449,11 @@ protected:
         }
         drawHeader();
         drawTracks();
-        drawWave();
-        drawKnobs();
-        drawSequencer();
+        drawDisplay();
+        drawPage();
         drawRight();
+        drawSequencer();
+        drawKeyboard();
         if (overlay == ovPresets) drawPresets();
         if (overlay == ovSkins) drawSkins();
         if (overlay == ovSave) drawSave();
@@ -518,30 +541,30 @@ protected:
 
     void drawTracks()
     {
-        panelBox({14.f, 58.f, 236.f, 204.f});
         const uint32_t act = (uint32_t)std::lround(gp(gOUT_ACTIVE));
-        char b[16];
+        char b[64];
+        bool anySolo = false; for (int t = 0; t < kTracks; ++t) anySolo = anySolo || bank->kit[t].solo;
         for (int t = 0; t < kTracks; ++t) {
-            const bool sel = t == selTrack, muted = bank->kit[t].mute != 0;
-            const R r = trackBtn(t);
+            const Kit& k = bank->kit[t];
+            const bool sel = t == selTrack, silent = k.mute || (anySolo && !k.solo);
+            const R r = trackTab(t);
             if (sel) box(r, th->selFill); else { box(r, th->btnFill); frame(r, th->btnEdge); }
-            const Color fg = sel ? th->selText : (muted ? th->faint : th->text);
-            std::snprintf(b, sizeof(b), "T%d", t + 1);
-            number(r.x + 10, r.cy() + 1, b, 16.f, fg, ALIGN_LEFT | ALIGN_MIDDLE);
-            float sz = 10.f;
-            const std::string nm = fitText(srcName(t), r.w - 64.f, sz);
-            label(r.x + 42, r.y + 15, nm.c_str(), sz, fg, ALIGN_LEFT | ALIGN_MIDDLE);
-            std::snprintf(b, sizeof(b), "%d SLICES", bank->kit[t].nSlices);
-            label(r.x + 42, r.y + 32, bank->kit[t].nSlices > 1 ? b : "1 SLICE", 8.5f, sel ? th->selText : th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-            beginPath(); circle(r.x + r.w - 11, r.y + 13, 4.5f);
+            const Color fg = sel ? th->selText : (silent ? th->faint : th->text);
+            std::snprintf(b, sizeof(b), "%d", t + 1);
+            number(r.x + 12, r.cy() + 1, b, 22.f, fg, ALIGN_LEFT | ALIGN_MIDDLE);
+            float sz = 11.f;
+            const std::string nm = fitText(srcName(t), r.w - 110.f, sz);
+            label(r.x + 40, r.y + 16, nm.c_str(), sz, fg, ALIGN_LEFT | ALIGN_MIDDLE);
+            if (liveTrack(t)) std::snprintf(b, sizeof(b), "%s  INPUT", kModeNames[k.mode % kGrainModes]);
+            else std::snprintf(b, sizeof(b), "%s  %d %s", kModeNames[k.mode % kGrainModes], std::max(1, (int)k.nSlices), k.nSlices > 1 ? "SLICES" : "SLICE");
+            label(r.x + 40, r.y + 36, b, 8.5f, sel ? th->selText : th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+            beginPath(); circle(r.x + r.w - 14, r.y + 13, 4.5f);
             fillColor((act >> t) & 1 ? ledColor() : Color(fg, Color(0, 0, 0, 0.f), 0.25f)); fill();
-            const R mb = muteBtn(t);
-            if (muted) box(mb, th->lock, 3.f); else { box(mb, th->btnFill, 3.f); frame(mb, th->btnEdge, 3.f); }
-            label(mb.cx(), mb.cy() + 1, muted ? "OFF" : "ON", 8.5f, muted ? th->selText : th->btnText);
-            const R tb = trigBtn(t);
-            const bool held = drag == dkTrig && dragIndex == t;
-            if (held) box(tb, th->accent, 3.f); else { box(tb, th->btnFill, 3.f); frame(tb, th->btnEdge, 3.f); }
-            label(tb.cx(), tb.cy() + 1, "PLAY", 8.5f, held ? th->accentText : th->btnText);
+            const R sb = soloBtn(t), mb = muteBtn(t);
+            if (k.solo) box(sb, th->accent, 3.f); else { box(sb, th->btnFill, 3.f); frame(sb, th->btnEdge, 3.f); }
+            label(sb.cx(), sb.cy() + 1, "S", 9.f, k.solo ? th->accentText : th->btnText);
+            if (k.mute) box(mb, th->lock, 3.f); else { box(mb, th->btnFill, 3.f); frame(mb, th->btnEdge, 3.f); }
+            label(mb.cx(), mb.cy() + 1, "M", 9.f, k.mute ? th->selText : th->btnText);
         }
     }
 
@@ -564,21 +587,38 @@ protected:
         }
         return w;
     }
-    void drawWave()
+    // where START, END and POSITION are in the display (fractions of the whole material, or of the LIVE window)
+    void playRegion(double& a, double& b, double& p)
     {
-        panelBox({258.f, 58.f, 622.f, 204.f});
+        const int t = selTrack;
+        double ra = 0.0, rb = 1.0;
+        const SampleData* s = srcOf(t);
+        if (!liveTrack(t) && s && !s->pcm.empty()) {
+            const uint32_t frames = (uint32_t)s->pcm.size();
+            sliceRegion(bank->kit[t], sliceOf(knobValue(tpSLICE), bank->kit[t].nSlices), frames, ra, rb);
+            ra /= frames; rb /= frames;
+        }
+        double s0 = knobValue(tpSTART) / 127.0, s1 = knobValue(tpEND) / 127.0;
+        if (s1 < s0) std::swap(s0, s1);
+        a = ra + s0 * (rb - ra); b = ra + s1 * (rb - ra);
+        p = a + knobValue(tpPOSITION) / 127.0 * (b - a);
+    }
+    void drawDisplay()
+    {
+        panelBox({14.f, 116.f, 690.f, 330.f});
         const int t = selTrack;
         const Kit& kit = bank->kit[t];
         char b[64];
         std::snprintf(b, sizeof(b), "T%d", t + 1);
-        number(270, 73, b, 16.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
+        number(26, 133, b, 16.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
         float sz = 12.f;
         if (lockMode()) {
             std::snprintf(b, sizeof(b), "LOCK T%d STEP %d", lockTrack + 1, lockStep + 1);
-            label(304, 73, b, 11.f, th->lock, ALIGN_LEFT | ALIGN_MIDDLE);
+            label(62, 133, b, 11.f, th->lock, ALIGN_LEFT | ALIGN_MIDDLE);
+            frame(lockClearBtn(), th->lock); label(lockClearBtn().cx(), lockClearBtn().cy() + 1, "CLEAR LOCKS", 9.f, th->lock);
         } else {
-            const std::string nm = fitText(srcName(t), 134.f, sz);
-            label(304, 73, nm.c_str(), sz, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
+            const std::string nm = fitText(srcName(t), 220.f, sz);
+            label(62, 133, nm.c_str(), sz, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
         }
         std::snprintf(b, sizeof(b), "MODE: %s", kModeNames[kit.mode % kGrainModes]);
         button(modeBtn(), b, false, 9.f);
@@ -587,52 +627,83 @@ protected:
         const SampleData* s = srcOf(t);
         const R wr = waveR();
         box(wr, th->lcdBg); frame(wr, th->panelEdge, -1.f, th->panelEdgeWidth);
-        if (lockMode()) {
-            frame(lockClearBtn(), th->lock); label(lockClearBtn().cx(), lockClearBtn().cy() + 1, "CLEAR LOCKS", 9.f, th->lock);
-        } else if (liveTrack(t)) {
-            const int bars = capBars(gp(gCAPLEN));
-            std::snprintf(b, sizeof(b), bars == 1 ? "LAST %d BAR" : "LAST %d BARS", bars);
-            label(868, 74, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
-        } else if (s) {
-            std::snprintf(b, sizeof(b), "%.2f S   %d %s", s->pcm.size() / s->sr, std::max<int>(1, kit.nSlices), kit.nSlices > 1 ? "SLICES" : "SLICE");
-            label(868, 74, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
+        if (!lockMode()) {
+            if (liveTrack(t)) {
+                const int bars = capBars(gp(gCAPLEN));
+                std::snprintf(b, sizeof(b), bars == 1 ? "LAST %d BAR" : "LAST %d BARS", bars);
+                label(696, 133, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
+            } else if (s) {
+                std::snprintf(b, sizeof(b), "%.2f S", s->pcm.size() / s->sr);
+                label(696, 133, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
+            }
         }
-        if (liveTrack(t)) drawLiveWave(t, wr);
-        else if (!s || s->pcm.empty()) {
+        const int cols = (int)wr.w - 8;
+        const float x0 = wr.x + 4, cy = wr.cy(), hh = wr.h * 0.42f;
+        bool drawn = false;
+        if (liveTrack(t)) {
+            if (!direct) label(wr.cx(), wr.cy(), "LIVE INPUT (not reachable in this host)", 10.f, th->lcdDim);
+            else {
+                liveMn.resize(cols); liveMx.resize(cols);
+                direct->liveWave(liveMn.data(), liveMx.data(), cols);
+                bool any = false; for (int c = 0; c < cols; ++c) if (liveMx[c] - liveMn[c] > 1e-3f) { any = true; break; }
+                beginPath();
+                for (int c = 0; c < cols; ++c) rect(x0 + c, cy - liveMx[c] * hh, 1.f, std::max(1.f, (liveMx[c] - liveMn[c]) * hh));
+                fillColor(withAlpha(gp(gFREEZE) > 0.5f ? th->lock : th->lcdText, 0.85f)); fill();
+                if (!any) {
+                    label(wr.cx(), wr.cy() - 8, "NOTHING ON THE INPUT", 11.f, th->lcdDim);
+                    label(wr.cx(), wr.cy() + 12, "Route a track to KGRN-4's side-chain input in your music software", 9.5f, th->lcdDim);
+                }
+                label(wr.x + wr.w - 8, wr.y + 10, "NOW", 8.f, th->lcdDim, ALIGN_RIGHT | ALIGN_MIDDLE);
+                drawn = true;
+            }
+        } else if (!s || s->pcm.empty()) {
             label(wr.cx(), wr.cy() - 8, "NO SAMPLE ON THIS TRACK", 11.f, th->lcdDim);
             label(wr.cx(), wr.cy() + 12, "LOAD a WAV / AIFF file, drop one here, or choose a MATERIAL", 9.5f, th->lcdDim);
         } else {
-            const int cols = (int)wr.w - 8;
             const WaveCache& w = waveOf(t, cols);
-            // region of the selected slice
-            const uint32_t frames = (uint32_t)s->pcm.size();
-            const int slice = sliceOf(knobValue(tpSLICE), kit.nSlices);
-            double ra, rb; sliceRegion(kit, slice, frames, ra, rb);
-            const float x0 = wr.x + 4, xa = x0 + (float)(ra / frames) * cols, xb = x0 + (float)(rb / frames) * cols;
-            if (slice >= 0) { beginPath(); rect(xa, wr.y + 2, xb - xa, wr.h - 4); fillColor(withAlpha(th->lcdText, 0.10f)); fill(); }
-            const float cy = wr.cy(), hh = wr.h * 0.42f;
             beginPath();
-            for (int c = 0; c < cols; ++c) { const float x = x0 + c; rect(x, cy - w.mx[c] * hh, 1.f, std::max(1.f, (w.mx[c] - w.mn[c]) * hh)); }
+            for (int c = 0; c < cols; ++c) rect(x0 + c, cy - w.mx[c] * hh, 1.f, std::max(1.f, (w.mx[c] - w.mn[c]) * hh));
             fillColor(withAlpha(th->lcdText, 0.85f)); fill();
-            // slices
+            const int slice = sliceOf(knobValue(tpSLICE), kit.nSlices);
             for (int i = 0; i < kit.nSlices; ++i) {
                 const float x = x0 + kit.slice[i] * 1e-6f * cols;
-                beginPath(); rect(x, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lcdDim, i == slice ? 1.f : 0.6f)); fill();
-                if (kit.nSlices > 1 && kit.nSlices <= 32) {
+                beginPath(); rect(x, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lcdDim, i == slice ? 1.f : 0.5f)); fill();
+                if (kit.nSlices > 1) {
                     std::snprintf(b, sizeof(b), "%d", i + 1);
                     label(x + 3, wr.y + 9, b, 8.f, i == slice ? th->lcdText : th->lcdDim, ALIGN_LEFT | ALIGN_MIDDLE);
                 }
             }
-            // start position (POSITION inside the region)
-            const float xp = xa + (xb - xa) * knobValue(tpPOSITION) / 127.f;
+            drawn = true;
+        }
+        if (drawn) {
+            double a, e, p; playRegion(a, e, p);
+            const float xa = x0 + (float)a * cols, xe = x0 + (float)e * cols, xp = x0 + (float)p * cols;
+            // outside START .. END: darkened
+            const Color shade = withAlpha(th->lcdBg, 0.72f);
+            if (xa > x0) { beginPath(); rect(x0, wr.y + 2, xa - x0, wr.h - 4); fillColor(shade); fill(); }
+            if (xe < x0 + cols) { beginPath(); rect(xe, wr.y + 2, x0 + cols - xe, wr.h - 4); fillColor(shade); fill(); }
+            // START / END handles
+            for (int i = 0; i < 2; ++i) {
+                const float x = i ? xe : xa;
+                beginPath(); rect(x - 1, wr.y + 2, 2.f, wr.h - 4); fillColor(accentInk()); fill();
+                beginPath();
+                if (i == 0) { moveTo(x, wr.y + 2); lineTo(x + 9, wr.y + 2); lineTo(x, wr.y + 12); }
+                else { moveTo(x, wr.y + 2); lineTo(x - 9, wr.y + 2); lineTo(x, wr.y + 12); }
+                closePath(); fillColor(accentInk()); fill();
+            }
+            label(xa + 3, wr.y + wr.h - 9, "S", 8.f, accentInk(), ALIGN_LEFT | ALIGN_MIDDLE);
+            label(xe - 3, wr.y + wr.h - 9, "E", 8.f, accentInk(), ALIGN_RIGHT | ALIGN_MIDDLE);
+            // POSITION
             beginPath(); moveTo(xp, wr.y + wr.h - 2); lineTo(xp - 5, wr.y + wr.h - 10); lineTo(xp + 5, wr.y + wr.h - 10); closePath(); fillColor(th->lock); fill();
             beginPath(); rect(xp, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lock, 0.7f)); fill();
-            // play head
-            const float ph = gp(gOUT_POS1 + t);
-            if (ph >= 0.f) {
-                const float x = x0 + ph * cols;
+            // the play heads of the sounding voices
+            float heads[8]; int nh = direct ? direct->voiceHeads(t, heads, 8) : 0;
+            if (!direct && gp(gOUT_POS1 + t) >= 0.f) { heads[0] = gp(gOUT_POS1 + t); nh = 1; }
+            for (int i = 0; i < nh; ++i) {
+                const float x = x0 + clampf(heads[i], 0.f, 1.f) * cols;
                 beginPath(); rect(x - 1, wr.y + 2, 2.f, wr.h - 4); fillColor(ledColor()); fill();
             }
+            if (nh > 0) { std::snprintf(b, sizeof(b), nh == 1 ? "%d VOICE" : "%d VOICES", nh); label(wr.cx(), wr.y + wr.h - 9, b, 8.f, th->lcdDim); }
         }
         button(loadBtn(), "LOAD", false, 10.5f);
         std::snprintf(b, sizeof(b), "MATERIAL: %s", kit.material ? kMaterialNames[std::min<int>(kit.material, kMatLive)] : "SAMPLE");
@@ -643,33 +714,9 @@ protected:
         box(amtBox(), th->lcdBg);
         if (kit.sliceMode) std::snprintf(b, sizeof(b), "%d SLICES", std::max(1, (int)kit.sliceAmount)); else std::snprintf(b, sizeof(b), "SENS %d", kit.sliceAmount);
         label(amtBox().cx(), amtBox().cy() + 1, b, 10.f, th->lcdText);
-        if (!smpMsg.empty()) label(868, 238, smpMsg.c_str(), 9.f, th->lock, ALIGN_RIGHT | ALIGN_MIDDLE);
+        if (!smpMsg.empty()) label(696, 285, smpMsg.c_str(), 9.f, th->lock, ALIGN_RIGHT | ALIGN_MIDDLE);
     }
-
-    // LIVE: the input window, the start (POSITION) and the play head, redrawn all the time
     std::vector<float> liveMn, liveMx;
-    void drawLiveWave(int t, const R& wr)
-    {
-        const int cols = (int)wr.w - 8;
-        if (!direct) { label(wr.cx(), wr.cy(), "LIVE INPUT (not reachable in this host)", 10.f, th->lcdDim); return; }
-        liveMn.resize(cols); liveMx.resize(cols);
-        direct->liveWave(liveMn.data(), liveMx.data(), cols);
-        const float x0 = wr.x + 4, cy = wr.cy(), hh = wr.h * 0.42f;
-        bool any = false; for (int c = 0; c < cols; ++c) if (liveMx[c] - liveMn[c] > 1e-3f) { any = true; break; }
-        beginPath();
-        for (int c = 0; c < cols; ++c) { const float x = x0 + c; rect(x, cy - liveMx[c] * hh, 1.f, std::max(1.f, (liveMx[c] - liveMn[c]) * hh)); }
-        fillColor(withAlpha(gp(gFREEZE) > 0.5f ? th->lock : th->lcdText, 0.85f)); fill();
-        if (!any) {
-            label(wr.cx(), wr.cy() - 8, "NOTHING ON THE INPUT", 11.f, th->lcdDim);
-            label(wr.cx(), wr.cy() + 12, "Route a track to KGRN-4's side-chain input in your music software", 9.5f, th->lcdDim);
-        }
-        const float xp = x0 + cols * knobValue(tpPOSITION) / 127.f;
-        beginPath(); moveTo(xp, wr.y + wr.h - 2); lineTo(xp - 5, wr.y + wr.h - 10); lineTo(xp + 5, wr.y + wr.h - 10); closePath(); fillColor(th->lock); fill();
-        beginPath(); rect(xp, wr.y + 2, 1.f, wr.h - 4); fillColor(withAlpha(th->lock, 0.7f)); fill();
-        const float ph = gp(gOUT_POS1 + t);
-        if (ph >= 0.f) { const float x = x0 + ph * cols; beginPath(); rect(x - 1, wr.y + 2, 2.f, wr.h - 4); fillColor(ledColor()); fill(); }
-        label(wr.x + wr.w - 8, wr.y + 10, "NOW", 8.f, th->lcdDim, ALIGN_RIGHT | ALIGN_MIDDLE);
-    }
 
     float knobValue(int k)
     {
@@ -678,88 +725,140 @@ protected:
         return tv(t, k);
     }
     bool knobLocked(int k) { return lockMode() && lockTrack == selTrack && pat().locks[selTrack][lockStep][k] != kNoLock; }
-    void drawKnobs()
+    // the text of a track knob (LFO rates show their note value when synced)
+    std::string knobText(int k, float v)
     {
-        panelBox({14.f, 270.f, 866.f, 216.f});
-        for (int gi = 0; gi < kGroups; ++gi) {
-            const R a = knobR(kGroupStart[gi]), z = knobR(kGroupStart[gi + 1] - 1);
-            label(a.x + 4, a.y - 8, kGroupNames[gi], 9.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-            const float lx = a.x + 4 + 62;
-            if (z.x + z.w - 6 > lx) { beginPath(); rect(lx, a.y - 8, z.x + z.w - 6 - lx, 1.f); fillColor(withAlpha(th->dim, 0.35f)); fill(); }
-        }
         const Kit& kit = bank->kit[selTrack];
-        const int n = kit.nSlices;
-        for (int k = 0; k < kTrackParams; ++k) {
-            const float v = knobValue(k);
-            drawKnob(knobR(k), v / 127.f, kTP[k].name, trackValueText(k, v, n, kit.mode, kit.sync != 0), knobLocked(k), drag == dkKnob && dragIndex == k, 19.f, 30.f, 64.f, 80.f);
+        if (k >= tpL1WAVE && (k - tpL1WAVE) % kLfoParams == 1) {
+            const int i = (k - tpL1WAVE) / kLfoParams;
+            if (lfoSynced(knobValue(lfoParam(i, 2)))) return kLfoSyncNames[lfoSyncDiv(v)];
         }
+        return trackValueText(k, v, kit.nSlices, kit.mode, kit.sync != 0);
     }
-
-    void drawSequencer()
+    // how far the track's LFOs move a knob right now (knob units), for the dot on its arc
+    bool lfoMod(int k, float& off)
     {
-        panelBox({14.f, 486.f, 866.f, 222.f});
-        Pattern& p = pat();
-        char b[32];
-        for (int i = 0; i < 4; ++i) {
-            std::snprintf(b, sizeof(b), "%d-%d", i * 16 + 1, i * 16 + 16);
-            bool used = false; for (int t = 0; t < kTracks; ++t) used = used || p.len[t] > i * 16;
-            const R r = stepPageBtn(i);
-            if (stepPg == i) button(r, b, true, 9.5f);
-            else { box(r, th->btnFill); frame(r, th->btnEdge); label(r.cx(), r.cy() + 1, b, 9.5f, used ? th->btnText : th->faint); }
+        off = 0.f; bool any = false;
+        if (k >= kModTargets || !direct) return false;
+        for (int i = 0; i < kLfos; ++i) {
+            if (lfoDest(knobValue(lfoParam(i, 4))) != k + 1 || std::fabs(knobValue(lfoParam(i, 3)) - 64.f) < 0.5f) continue;
+            off += direct->lfoValue(selTrack, i) * 63.5f; any = true;
         }
-        button(lenMinus(), "-", false, 12.f); button(lenPlus(), "+", false, 12.f);
-        box(lenBox(), th->lcdBg); std::snprintf(b, sizeof(b), "LEN %d", p.len[selTrack]);
-        label(lenBox().cx(), lenBox().cy() + 1, b, 10.f, th->lcdText);
-        std::snprintf(b, sizeof(b), "SPEED %s", kSpeedNames[p.speed[selTrack] % kSpeeds]);
-        button(speedBtn(), b, p.speed[selTrack] != 0, 9.5f);
-        button(rotL(), "<", false, 11.f); button(rotR(), ">", false, 11.f);
-        button(fillBtn(), "FILL", false, 9.5f);
-        button(clearTrackBtn(), "CLEAR", false, 9.5f);
-        button(copyTrackBtn(), "COPY", false, 9.5f);
-        button(pasteTrackBtn(), "PASTE", false, 9.5f);
-        if (!patMsg.empty()) label(868, 506, patMsg.c_str(), 9.f, th->lock, ALIGN_RIGHT | ALIGN_MIDDLE);
-        for (int t = 0; t < kTracks; ++t) {
-            const bool sel = t == selTrack, muted = bank->kit[t].mute != 0;
-            const R rb = rowBtn(t);
-            if (sel) box(rb, th->selFill); else { box(rb, th->btnFill); frame(rb, th->btnEdge); }
-            const Color fg = sel ? th->selText : (muted ? th->faint : th->text);
-            std::snprintf(b, sizeof(b), "T%d", t + 1);
-            number(rb.x + 10, rb.y + 14, b, 14.f, fg, ALIGN_LEFT | ALIGN_MIDDLE);
-            std::snprintf(b, sizeof(b), "%d  %s", p.len[t], kSpeedNames[p.speed[t] % kSpeeds]);
-            label(rb.x + 10, rb.y + 30, b, 8.5f, sel ? th->selText : th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-            const int now = trackStepNow(t);
-            for (int i = 0; i < 16; ++i) {
-                const int s = stepPg * 16 + i;
-                const R r = stepCell(t, i);
-                const bool inLen = s < p.len[t], on = p.on[t][s] != 0;
-                const Color cellCol = inLen ? ((i / 4) % 2 ? th->stepAlt : th->stepFill) : Color(th->stepOff, th->bg, 0.4f);
-                box(r, cellCol, 3.f);
-                if (on && inLen) {
-                    const Color lc = onColor();
-                    if (th->glow) { beginPath(); rect(r.x - 3, r.y - 3, r.w + 6, r.h + 6); fillPaint(boxGradient(r.x, r.y, r.w, r.h, 3, 8, Color(lc, Color(0, 0, 0, 0.f), 0.45f), Color(0, 0, 0, 0.f))); fill(); }
-                    box({r.x + 3, r.y + 3, r.w - 6, r.h - 6}, lc, 2.f);
-                } else if (inLen) box({r.x + 4, r.y + 4, r.w - 8, 5}, th->ledOff, 1.f);
-                if (inLen && p.hasLocks(t, s)) { beginPath(); circle(r.x + r.w - 8, r.y + r.h - 8, 2.8f); fillColor(on ? th->selText : th->lock); fill(); }
-                if (inLen && p.locks[t][s][tpSLICE] != kNoLock && bank->kit[t].nSlices > 1) {
-                    const int sl = sliceOf(p.locks[t][s][tpSLICE], bank->kit[t].nSlices);
-                    std::snprintf(b, sizeof(b), "%s", sl < 0 ? "ALL" : std::to_string(sl + 1).c_str());
-                    label(r.x + 7, r.y + r.h - 9, b, 8.f, on ? th->selText : th->lock, ALIGN_LEFT | ALIGN_MIDDLE);
+        return any;
+    }
+    bool lfoActive() { for (int i = 0; i < kLfos; ++i) if (lfoDest(tv(selTrack, lfoParam(i, 4))) > 0 && std::fabs(tv(selTrack, lfoParam(i, 3)) - 64.f) >= 0.5f) return true; return false; }
+    void drawPage()
+    {
+        for (int i = 0; i < kPages; ++i) {
+            const R r = pageTab(i);
+            button(r, kPageNames[i], page == i, 10.f);
+            if (i >= 4) {                                   // a lit dot when that LFO moves something
+                const int l = i - 4;
+                if (lfoDest(tv(selTrack, lfoParam(l, 4))) > 0 && std::fabs(tv(selTrack, lfoParam(l, 3)) - 64.f) >= 0.5f) {
+                    beginPath(); circle(r.x + 9, r.cy(), 3.f); fillColor(page == i ? th->selText : ledColor()); fill();
                 }
-                if (s == now && inLen) frame(r, th->text, 3.f, 2.f);
-                if (lockStep == s && lockTrack == t) frame({r.x - 2, r.y - 2, r.w + 4, r.h + 4}, th->lock, 4.f, 2.f);
             }
         }
-        for (int i = 0; i < 16; ++i) {
-            const R r = stepCell(kTracks - 1, i);
-            std::snprintf(b, sizeof(b), "%d", stepPg * 16 + i + 1);
-            label(r.cx(), r.y + r.h + 10, b, 8.f, i % 4 == 0 ? th->dim : th->faint);
+        const int n = pageCount();
+        for (int i = 0; i < n; ++i) {
+            const int k = kPageStart[page] + i;
+            const float v = knobValue(k);
+            const R r = pageKnob(i);
+            drawKnob(r, v / 127.f, kTP[k].name, knobText(k, v), knobLocked(k), drag == dkKnob && dragIndex == k, 22.f, 34.f, 74.f, 92.f);
+            float off;
+            if (lfoMod(k, off)) {
+                const float m = clampf((v + off) / 127.f, 0.f, 1.f), ang = kPi * 0.75f + kPi * 1.5f * m;
+                beginPath(); circle(r.cx() + std::cos(ang) * 22.f, r.y + 34.f + std::sin(ang) * 22.f, 3.6f); fillColor(ledColor()); fill();
+            }
+        }
+        if (page >= 4) {                                     // LFO page: its shape and where it is now
+            const int l = page - 4;
+            const R sc = lfoScope();
+            box(sc, th->lcdBg); frame(sc, th->panelEdge, -1.f, th->panelEdgeWidth);
+            const int wv = lfoWave(knobValue(lfoParam(l, 0)));
+            const float dep = (knobValue(lfoParam(l, 3)) - 64.f) / 63.f;
+            beginPath();
+            for (int i = 0; i <= 64; ++i) {
+                const float x = i / 64.f;
+                float y;
+                switch (wv) {
+                case 0: y = x < 0.5f ? 4.f * x - 1.f : 3.f - 4.f * x; break;
+                case 1: y = std::sin(kTwoPi * x); break;
+                case 2: y = x < 0.5f ? 1.f : -1.f; break;
+                case 3: y = 2.f * x - 1.f; break;
+                case 4: y = 1.f - 2.f * x; break;
+                default: { static const float r8[8] = {0.6f, -0.3f, 0.9f, -0.8f, 0.1f, 0.5f, -0.6f, 0.2f}; y = r8[std::min(7, (int)(x * 8))]; break; }
+                }
+                y *= dep;
+                const float px = sc.x + 8 + x * (sc.w - 16), py = sc.cy() - y * (sc.h * 0.36f);
+                if (i == 0) moveTo(px, py); else lineTo(px, py);
+            }
+            strokeColor(th->lcdText); strokeWidth(1.6f); stroke();
+            if (direct) {
+                const float y = direct->lfoValue(selTrack, l);
+                box({sc.x + sc.w - 7, sc.cy() - std::max(0.f, y) * sc.h * 0.36f, 3.f, std::fabs(y) * sc.h * 0.36f + 1.f}, ledColor(), 1.f);
+            }
+            const int d = lfoDest(knobValue(lfoParam(l, 4)));
+            char b[48]; std::snprintf(b, sizeof(b), "-> %s", d ? kTP[d - 1].name : "NONE");
+            label(sc.x + 8, sc.y + 11, b, 8.5f, th->lcdDim, ALIGN_LEFT | ALIGN_MIDDLE);
         }
     }
 
+    // effects: ECHO / REVERB / CHORUS / MASTER
+    int fxCount() const { static const int n[kFxPages] = {6, 5, 3, 4}; return n[fxPage]; }
+    int fxG(int i) const
+    {
+        static const int g[kFxPages][6] = {{gDLY_TIME, gDLY_FB, gDLY_HICUT, gDLY_LOCUT, gDLY_WIDTH, gDLY_LEVEL},
+                                           {gREV_SIZE, gREV_TONE, gREV_PRE, gREV_WIDTH, gREV_LEVEL, 0},
+                                           {gCHO_RATE, gCHO_DEPTH, gCHO_MIX, 0, 0, 0},
+                                           {gDRIVE, gLOWCUT, gHIGHCUT, gOUTPUT, 0, 0}};
+        return g[fxPage][i];
+    }
+    static const char* fxName(int g)
+    {
+        switch (g) {
+        case gDLY_TIME: return "TIME"; case gDLY_FB: return "FEEDBACK"; case gDLY_HICUT: case gHIGHCUT: return "HIGH CUT"; case gDLY_LOCUT: case gLOWCUT: return "LOW CUT";
+        case gDLY_WIDTH: case gREV_WIDTH: return "WIDTH"; case gDLY_LEVEL: case gREV_LEVEL: return "LEVEL";
+        case gREV_SIZE: return "SIZE"; case gREV_TONE: return "TONE"; case gREV_PRE: return "PRE-DELAY";
+        case gCHO_RATE: return "RATE"; case gCHO_DEPTH: return "DEPTH"; case gCHO_MIX: return "MIX";
+        case gDRIVE: return "DRIVE"; default: return "OUTPUT";
+        }
+    }
+    static std::string hzText(float hz) { char b[24]; if (hz >= 1000.f) std::snprintf(b, sizeof(b), "%.1fK", hz / 1000.f); else std::snprintf(b, sizeof(b), "%d HZ", (int)std::lround(hz)); return b; }
+    std::string globalText(int g) const
+    {
+        const float v = gp(g);
+        char b[32];
+        switch (g) {
+        case gREV_SIZE: std::snprintf(b, sizeof(b), "%.1f S", 0.4f * std::pow(35.f, v / 127.f)); return b;
+        case gREV_TONE: return hzText(1500.f * std::pow(9.3f, v / 127.f));
+        case gREV_PRE: std::snprintf(b, sizeof(b), "%d MS", (int)std::lround(v / 127.f * 200.f)); return b;
+        case gREV_WIDTH: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 80.f * 100.f)); return b;
+        case gDLY_WIDTH: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 64.f * 100.f)); return b;
+        case gDLY_TIME: return kDelTimeNames[bin8(v)];
+        case gDLY_FB: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 127.f * 92.f)); return b;
+        case gDLY_HICUT: return hzText(cutHz(v, 800.f, 18000.f));
+        case gDLY_LOCUT: return hzText(cutHz(v, 20.f, 2000.f));
+        case gDLY_LEVEL: case gREV_LEVEL: { const float gn = levelGain(v); if (gn < 1e-4f) return "-INF"; std::snprintf(b, sizeof(b), "%+.1fdB", 20.f * std::log10(gn)); return b; }
+        case gCHO_RATE: std::snprintf(b, sizeof(b), "%.2f HZ", 0.05f * std::pow(100.f, v / 127.f)); return b;
+        case gCHO_DEPTH: case gCHO_MIX: case gDRIVE: return pctText(v);
+        case gLOWCUT: return v < 0.5f ? std::string("OFF") : hzText(cutHz(v, 10.f, 1200.f));
+        case gHIGHCUT: return v > 126.5f ? std::string("OFF") : hzText(cutHz(v, 600.f, 20000.f));
+        default: { const float db = trimDb(v); if (db < -100.f) return "-INF"; std::snprintf(b, sizeof(b), "%+.1fdB", db); return b; }
+        }
+    }
     void drawRight()
     {
-        panelBox({888.f, 58.f, 278.f, 190.f});
-        label(900, 72, "PATTERNS", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        panelBox({712.f, 116.f, 454.f, 330.f});
+        static const char* names[kFxPages] = {"ECHO", "REVERB", "CHORUS", "MASTER"};
+        for (int i = 0; i < kFxPages; ++i) button(fxTab(i), names[i], fxPage == i, 10.f);
+        for (int i = 0; i < fxCount(); ++i) {
+            const int g = fxG(i);
+            drawKnob(fxKnob(i), gp(g) / 127.f, fxName(g), globalText(g), false, drag == dkGlobal && dragIndex == g, 21.f, 34.f, 74.f, 92.f);
+        }
+        label(724, 284, "PATTERNS", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        button(chainBtn(), "CHAIN", bank->chain.active(), 9.f);
+        button(patCopy(), "COPY", false, 9.f); button(patPaste(), "PASTE", false, 9.f); button(patClear(), "CLEAR", false, 9.f);
         const int ep = editPattern(), pp = (int)std::lround(gp(gOUT_PATTERN));
         const bool running = gp(gOUT_STEP) >= 0.f;
         for (int i = 0; i < kPatterns; ++i) {
@@ -768,40 +867,132 @@ protected:
             if (i == ep) box(r, th->selFill); else { box(r, th->btnFill); frame(r, th->btnEdge); }
             bool any = false; for (int t = 0; t < kTracks && !any; ++t) any = !bank->patterns[i].trackEmpty(t);
             number(r.cx(), r.cy() + 1, b, 13.f, i == ep ? th->selText : (any ? th->text : th->faint));
-            if (running && i == pp && pp != ep) frame(r, th->accent, -1.f, 2.f);
+            if (running && i == pp) { beginPath(); rect(r.x + 4, r.y + r.h - 3, r.w - 8, 2); fillColor(th->accent); fill(); }
         }
-        button(patCopy(), "COPY", false, 9.f); button(patPaste(), "PASTE", false, 9.f); button(patClear(), "CLEAR", false, 9.f);
-        button(chainBtn(), "CHAIN", bank->chain.active(), 9.f);
-        panelBox({888.f, 256.f, 278.f, 262.f});
-        label(900, 270, "ECHO / REVERB / OUT", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-        for (int i = 0; i < 5; ++i) {
-            const int g = kFxG[i];
-            drawKnob(gKnob(i), gp(g) / 127.f, kFxNames[i], globalText(g), false, drag == dkGlobal && dragIndex == i, 22.f, 38.f, 76.f, 93.f);
-        }
-        panelBox({888.f, 526.f - 8.f, 278.f, 190.f});
-        const R pn = presetName();
-        label(pn.x + 2, pn.y + 10, "PRESET", 9.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-        number(pn.x + 2, pn.y + 30, presetNameStr.c_str(), 15.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
-        box(presetBtn(), th->btnFill); frame(presetBtn(), th->text, -1.f, 1.5f);
-        label(presetBtn().cx(), presetBtn().cy() + 1, "PRESETS", 11.f, th->text);
-        button(saveBtn(), "SAVE AS PRESET", false, 10.f);
+        const R pb = presetBtn();
+        box(pb, th->btnFill); frame(pb, th->text, -1.f, 1.5f);
+        label(pb.x + 10, pb.cy() + 1, "PRESETS", 9.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        number(pb.x + pb.w - 10, pb.cy() + 1, presetNameStr.c_str(), 14.f, th->text, ALIGN_RIGHT | ALIGN_MIDDLE);
+        button(saveBtn(), "SAVE AS PRESET", false, 9.5f);
         const bool can = !undoStack.empty();
         if (can) button(undoBtn(), ("UNDO " + undoStack.back().what).c_str(), false, 10.f);
         else { box(undoBtn(), th->btnFill); frame(undoBtn(), Color(th->btnEdge, th->bg, 0.5f)); label(undoBtn().cx(), undoBtn().cy() + 1, "UNDO", 10.f, th->faint); }
+        button(fillHoldBtn(), "FILL (HOLD)", fillHeld, 10.f);
     }
-    static constexpr int kFxG[5] = {gREV_SIZE, gREV_TONE, gOUTPUT, gDLY_TIME, gDLY_FB};
-    static constexpr const char* kFxNames[5] = {"REV SIZE", "REV TONE", "OUTPUT", "ECHO TIME", "FEEDBACK"};
-    std::string globalText(int g) const
+
+    // the sequencer of the selected track: lanes as KMSP-6
+    void drawSequencer()
     {
-        const float v = gp(g);
-        char b[32];
-        switch (g) {
-        case gREV_SIZE: std::snprintf(b, sizeof(b), "%.1f S", 0.4f * std::pow(35.f, v / 127.f)); return b;
-        case gREV_TONE: { const float hz = 1500.f * std::pow(9.3f, v / 127.f); std::snprintf(b, sizeof(b), "%.1fK", hz / 1000.f); return b; }
-        case gDLY_TIME: return kDelTimeNames[bin8(v)];
-        case gDLY_FB: std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 127.f * 92.f)); return b;
-        default: { const float db = trimDb(v); if (db < -100.f) return "-INF"; std::snprintf(b, sizeof(b), "%+.1fdB", db); return b; }
+        panelBox({14.f, 454.f, 1152.f, 258.f});
+        static const char* lanes[kLanes] = {"TRIG", "NOTE", "LEN", "CHORD", "RATCH", "COND"};
+        for (int i = 0; i < kLanes; ++i) button(laneBtn(i), lanes[i], lane == i, 10.f);
+        Pattern& p = pat();
+        const int t = selTrack, len = p.len[t];
+        const int now = trackStepNow(t);
+        char b[48];
+        for (int i = 0; i < 4; ++i) {
+            std::snprintf(b, sizeof(b), "%d", i + 1);
+            const R r = stepPageBtn(i);
+            if (i * 16 < len) {
+                button(r, b, stepPg == i, 10.f);
+                if (now >= 0 && now / 16 == i) { beginPath(); rect(r.x + 4, r.y + r.h - 3, r.w - 8, 2); fillColor(th->accent); fill(); }
+            } else label(r.cx(), r.cy() + 1, b, 10.f, th->faint);
         }
+        button(lenMinus(), "-", false, 12.f); button(lenPlus(), "+", false, 12.f);
+        box(lenBox(), th->lcdBg); std::snprintf(b, sizeof(b), "L:%d", len);
+        label(lenBox().cx(), lenBox().cy() + 1, b, 11.f, th->lcdText);
+        std::snprintf(b, sizeof(b), "SPEED %s", kSpeedNames[p.speed[t] % kSpeeds]);
+        button(speedBtn(), b, p.speed[t] != 0, 9.5f);
+        for (const R& r : {rotL(), rotR()}) {
+            button(r, "", false, 10.f);
+            label(r.cx(), r.cy() + 1, r.x == rotL().x ? "\xE2\x97\x80" : "\xE2\x96\xB6", 9.f, th->btnText, ALIGN_CENTER | ALIGN_MIDDLE, fnSans);
+        }
+        button(clearTrackBtn(), "CLEAR", false, 9.5f);
+        button(copyTrackBtn(), trackClip ? "COPIED" : "COPY", false, 9.5f);
+        button(pasteTrackBtn(), "PASTE", false, 9.5f);
+        button(lockClrAll(), "-LOCKS", false, 9.5f);
+        button(allOnBtn(), "ALL", false, 9.5f);
+        if (!patMsg.empty()) label(1160, 446, patMsg.c_str(), 9.f, th->lock, ALIGN_RIGHT | ALIGN_MIDDLE);
+        const bool neon = th->logo == lgNeon;
+        for (int i = 0; i < 16; ++i) {
+            const int s = stepPg * 16 + i;
+            const R r = stepCell(i);
+            const bool inLen = s < len, on = inLen && p.on[t][s];
+            const Color bg = inLen ? ((i / 4) % 2 ? th->stepAlt : th->stepFill) : th->stepOff;
+            box(r, bg);
+            if (s == now && inLen) frame(r, th->logo == lgRiso ? th->text : th->selFill, -1.f, 2.5f);
+            else if (lockStep == s && lockTrack == t) frame(r, th->lock, -1.f, 3.f);
+            else if (lane == lnNote && s == noteStep) frame(r, th->lock, -1.f, 2.f);
+            else frame(r, Color(th->btnEdge, bg, 0.5f));
+            const R led{r.x + 8, r.y + 7, r.w - 16, 9};
+            if (on) {
+                const Color lc = neon ? Color(236, 36, 50) : th->accent;
+                if (th->glow) { beginPath(); rect(led.x - 4, led.y - 4, led.w + 8, led.h + 8); fillPaint(boxGradient(led.x, led.y, led.w, led.h, 2, 8, Color(lc, Color(0, 0, 0, 0.f), 0.5f), Color(0, 0, 0, 0.f))); fill(); }
+                box(led, lc, 1.5f);
+            } else box(led, inLen ? th->ledOff : Color(th->ledOff, th->bg, 0.5f), 2.f);
+            std::snprintf(b, sizeof(b), "%d", s + 1);
+            label(r.x + 6, r.y + 24, b, 9.f, inLen ? th->dim : th->faint, ALIGN_LEFT | ALIGN_MIDDLE);
+            if (s % 4 == 0) box({r.x + 6.f, r.y + 30.f, s + 1 < 10 ? 7.f : 13.f, 1.f}, inLen ? th->dim : th->faint);
+            if (inLen && p.hasLocks(t, s)) { beginPath(); circle(r.x + r.w - 9, r.y + 24, 2.8f); fillColor(th->lock); fill(); }
+            if (!on) continue;
+            const char* big = nullptr; char nn[16];
+            switch (lane) {
+            case lnLen: big = kGateNames[p.gate[t][s] % kGateCount]; break;
+            case lnChord: big = kChords[p.chord[t][s] % kChordCount].name; break;
+            case lnRatch: std::snprintf(nn, sizeof(nn), "x%d", kRatchValues[p.ratch[t][s] % kRatchCount]); big = nn; break;
+            case lnCond: big = p.cond[t][s] ? kConds[p.cond[t][s] % kNumConds].name : "-"; break;
+            default: big = noteName(p.note[t][s], nn, sizeof(nn)); break;
+            }
+            number(r.cx(), r.y + 44, big, 16.f, th->stepText);
+            // gate bar (one step = full width, longer = arrow, HOLD = until the next note)
+            const int gi = p.gate[t][s] % kGateCount;
+            const float g = gi == kGateHold ? 99.f : kGateSteps[gi];
+            const Color gc = Color(th->stepText, bg, 0.45f);
+            box({r.x + 8, r.y + 58, (r.w - 16) * std::min(1.f, g), 3}, gc, 1.f);
+            if (g > 1.f) { beginPath(); moveTo(r.x + r.w - 8, r.y + 56); lineTo(r.x + r.w - 3, r.y + 59.5f); lineTo(r.x + r.w - 8, r.y + 63); closePath(); fillColor(gc); fill(); }
+            std::string ex;
+            if (lane != lnChord && p.chord[t][s]) { ex += kChords[p.chord[t][s] % kChordCount].name; ex += " "; }
+            if (lane != lnRatch && p.ratch[t][s]) { std::snprintf(nn, sizeof(nn), "x%d ", kRatchValues[p.ratch[t][s] % kRatchCount]); ex += nn; }
+            if (lane != lnCond && p.cond[t][s]) { ex += kConds[p.cond[t][s] % kNumConds].name; ex += " "; }
+            if (p.locks[t][s][tpSLICE] != kNoLock && bank->kit[t].nSlices > 1) {
+                const int sl = sliceOf(p.locks[t][s][tpSLICE], bank->kit[t].nSlices);
+                ex += sl < 0 ? std::string("ALL") : "S" + std::to_string(sl + 1);
+            }
+            if (!ex.empty()) label(r.cx(), r.y + 71, ex.c_str(), 8.5f, th->extra);
+        }
+    }
+
+    void drawKeyboard()
+    {
+        button(octDown(), "-", false, 14.f); button(octUp(), "+", false, 14.f);
+        const R ob = octBox();
+        box(ob, th->lcdBg); frame(ob, th->panelEdge, -1.f, th->panelEdgeWidth);
+        label(ob.cx(), ob.y + 16, "OCT", 9.f, th->lcdDim);
+        char nb[16];
+        number(ob.cx(), ob.cy(), noteName(kbLow(), nb, sizeof(nb)), 17.f, th->lcdText);
+        const int lo = kbLow(), hi = lo + 12 * kKbOctaves;
+        const int stepNote = (lane == lnNote && noteStep >= 0 && pat().on[selTrack][noteStep]) ? pat().note[selTrack][noteStep] : -1;
+        auto lum = [](const Color& c) { return 0.3f * c.red + 0.59f * c.green + 0.11f * c.blue; };
+        const Color whiteKey = lum(th->text) > lum(th->stepFill) ? Color(th->text, th->panel, 0.12f) : th->stepFill;
+        const Color blackKey = lum(th->knobBody) < lum(th->text) ? th->knobBody : th->text;
+        auto keyColor = [&](int n, bool black) -> Color {
+            if (n == keyHeld) return th->accent;
+            if (n == stepNote) return th->lock;
+            if (n == kBaseNote) return Color(black ? blackKey : whiteKey, th->accent, 0.25f);   // the sample's own pitch
+            return black ? blackKey : whiteKey;
+        };
+        for (int n = lo; n <= hi; ++n) {
+            if (isBlack(n)) continue;
+            const R r = keyRect(n);
+            box(r, keyColor(n, false), 3.f);
+            if (n % 12 == 0) label(r.cx(), r.y + r.h - 10, noteName(n, nb, sizeof(nb)), 8.5f, Color(blackKey, whiteKey, 0.3f));
+        }
+        for (int n = lo; n <= hi; ++n) if (isBlack(n)) box(keyRect(n), keyColor(n, true), 2.f);
+        std::snprintf(nb, sizeof(nb), "T%d", selTrack + 1);
+        label(904, 594, (std::string("KEYS PLAY ") + nb).c_str(), 10.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
+        label(904, 616, "C3 = THE SAMPLE'S OWN PITCH", 8.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        label(904, 636, "MIDI CH 2-5 = T1-T4, 6 VOICES", 8.5f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
+        button(notesOffBtn(), "ALL NOTES OFF", false, 10.f);
     }
     // ------------------------------------------------------------------ presets (factory + user files)
     static std::string userDir()
@@ -838,7 +1029,7 @@ protected:
         number(100, 92, "Presets", 22.f, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
         label(100, 120, "FACTORY", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
         label(600, 120, "YOURS", 10.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-        for (int i = 0; i < kNumPresets && i < 15; ++i) {
+        for (int i = 0; i < kNumPresets && i < kPresetRows; ++i) {
             const R r = presetItem(0, i);
             const bool sel = presetNameStr == kPresets[i].name;
             if (sel) box(r, th->selFill); else box(r, th->btnFill);
@@ -846,7 +1037,7 @@ protected:
             label(r.x + r.w - 10, r.cy() + 1, kPresets[i].desc, 8.5f, sel ? th->selText : th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
         }
         if (userPresets.empty()) label(600, 145, "none yet: SAVE AS PRESET stores the knobs, the 16 patterns and your samples", 9.5f, th->faint, ALIGN_LEFT | ALIGN_MIDDLE);
-        for (int i = 0; i < (int)userPresets.size() && i < 15; ++i) {
+        for (int i = 0; i < (int)userPresets.size() && i < kPresetRows; ++i) {
             const R r = presetItem(1, i);
             const bool sel = presetNameStr == userPresets[i];
             if (sel) box(r, th->selFill); else box(r, th->btnFill);
@@ -857,8 +1048,8 @@ protected:
     }
     void presetsClick(float x, float y)
     {
-        for (int i = 0; i < kNumPresets && i < 15; ++i) if (presetItem(0, i).in(x, y)) { loadFactory(i); return; }
-        for (int i = 0; i < (int)userPresets.size() && i < 15; ++i) if (presetItem(1, i).in(x, y)) { loadUser(userPresets[i]); return; }
+        for (int i = 0; i < kNumPresets && i < kPresetRows; ++i) if (presetItem(0, i).in(x, y)) { loadFactory(i); return; }
+        for (int i = 0; i < (int)userPresets.size() && i < kPresetRows; ++i) if (presetItem(1, i).in(x, y)) { loadUser(userPresets[i]); return; }
         if (presetsClose().in(x, y) || !presetsBox().in(x, y)) { overlay = ovNone; presetMsg.clear(); }
         repaint();
     }
@@ -882,8 +1073,12 @@ protected:
         std::fclose(fp);
         if (all.rfind("KGRN4-PRESET", 0) != 0) { presetMsg = "Not a KGRN-4 preset: " + name; repaint(); return; }
         snapshot("preset");
-        const bool v1 = all.rfind("KGRN4-PRESET 1", 0) == 0;       // 0.2: 16 knobs per track
+        // older files: 0.2 = 16 knobs per track ("KGRN4-PRESET 1"), 0.3 = 20 knobs ("KGRN4-PRESET 2"), both with the
+        // globals REV_SIZE REV_TONE DLY_TIME DLY_FB OUTPUT TEMPO PLAY PATTERN (FREEZE CAPLEN) after the tracks
+        const int ver = all.rfind("KGRN4-PRESET 1", 0) == 0 ? 1 : (all.rfind("KGRN4-PRESET 2", 0) == 0 ? 2 : 3);
+        static const int oldG[10] = {gREV_SIZE, gREV_TONE, gDLY_TIME, gDLY_FB, gOUTPUT, gTEMPO, gPLAY, gPATTERN, gFREEZE, gCAPLEN};
         std::vector<float> nv(values, values + kTotalParams);
+        if (ver < 3) for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) nv[tpIndex(t, k)] = trackParamDefault(k);
         std::string smpLines;
         const size_t bankPos = all.find("\nBANK\n");
         const std::string head = all.substr(0, bankPos == std::string::npos ? all.size() : bankPos);
@@ -893,10 +1088,14 @@ protected:
             int idx; float v;
             if (head.compare(st, 4, "SMP ") == 0) smpLines += head.substr(st + 4, en - st - 4) + "\n";
             else if (std::sscanf(head.c_str() + st, "V %d %f", &idx, &v) == 2 && std::isfinite(v)) {
-                if (v1) {
-                    static const int to[16] = {tpPOSITION, tpSLICE, tpSCAN, tpPITCH, tpSIZE, tpDENSITY, tpSPRAY, tpSPREAD,
-                                               tpATTACK, tpDECAY, tpFILTER, tpRESO, tpVOLUME, tpPAN, tpDELAY, tpREVERB};
-                    idx = idx < 64 ? tpIndex(idx / 16, to[idx % 16]) : (idx - 64 < 8 ? kGlobalBase + (idx - 64) : -1);
+                if (ver < 3) {
+                    const int per = ver == 1 ? 16 : 20, base = per * kTracks;
+                    if (idx < base) {
+                        int to = ver == 1 ? kKnobs02[idx % per] : kKnobs03[idx % per];
+                        if (to == tpPITCH) to = -1;                               // pitch: now the step notes
+                        else if (to == tpDECAY) { to = tpRELEASE; if (v >= 127.f) v = 60.f; }
+                        idx = to < 0 ? -1 : tpIndex(idx / per, to);
+                    } else idx = idx - base < 10 ? kGlobalBase + oldG[idx - base] : -1;
                 }
                 if (idx >= 0 && idx < kGlobalBase + gOUT_STEP) {
                     const int g = idx - kGlobalBase;
@@ -925,7 +1124,7 @@ protected:
         if (saveExists() && !saveConfirm) { saveConfirm = true; repaint(); return; }
         FILE* fp = fs::open(userDir() + saveName + ".kgrn", "wb");
         if (!fp) { presetMsg = "Could not write the preset."; overlay = ovNone; repaint(); return; }
-        std::fprintf(fp, "KGRN4-PRESET 2\nNAME %s\n", saveName.c_str());
+        std::fprintf(fp, "KGRN4-PRESET 3\nNAME %s\n", saveName.c_str());
         for (int i = 0; i < kGlobalBase + gOUT_STEP; ++i) {
             if (i == kGlobalBase + gPLAY || i == kGlobalBase + gPATTERN) continue;
             std::fprintf(fp, "V %d %.4f\n", i, values[i]);
@@ -1245,7 +1444,7 @@ protected:
             return;
         }
         int t = selTrack;
-        for (int i = 0; i < kTracks; ++i) if (trackBtn(i).in((float)x, (float)y) || rowBtn(i).in((float)x, (float)y)) t = i;
+        for (int i = 0; i < kTracks; ++i) if (trackTab(i).in((float)x, (float)y)) t = i;
         overlay = ovNone;
         loadSampleFile(path, t);
     }
@@ -1257,28 +1456,6 @@ protected:
         if (!openFileBrowser(o)) { browseSample = false; showSmpMsg("File browser not available: drop a file on the window"); }
         repaint();
     }
-    // click in the waveform: the slice under the mouse (if the sample is sliced) and the start inside it
-    void waveClick(float x, bool pickSlice)
-    {
-        const int t = selTrack;
-        const R wr = waveR();
-        const int cols = (int)wr.w - 8;
-        if (liveTrack(t)) { setKnob(tpPOSITION, std::round(clampf((x - wr.x - 4) / cols, 0.f, 1.f) * 127.f)); return; }
-        const SampleData* s = srcOf(t);
-        if (!s || s->pcm.empty()) return;
-        const double f = clampf((x - wr.x - 4) / cols, 0.f, 0.99999f);
-        const Kit& kit = bank->kit[t];
-        int slice = sliceOf(knobValue(tpSLICE), kit.nSlices);
-        if (pickSlice && slice >= 0) {
-            slice = 0;
-            for (int i = 0; i < kit.nSlices; ++i) if (f * 1e6 >= kit.slice[i]) slice = i;
-            setKnob(tpSLICE, std::round(sliceKnob(slice, kit.nSlices)));
-        }
-        double ra, rb; sliceRegion(kit, slice, (uint32_t)s->pcm.size(), ra, rb);
-        const double pos = (f * s->pcm.size() - ra) / std::max(1.0, rb - ra);
-        setKnob(tpPOSITION, std::round(clampf((float)pos, 0.f, 1.f) * 127.f));
-    }
-
     // a page past the end of the selected track makes the track (and the pattern) that long
     void showPage(int i)
     {
@@ -1347,43 +1524,57 @@ protected:
     std::string tipAt(float x, float y)
     {
         for (int t = 0; t < kTracks; ++t) {
-            if (trackBtn(t).in(x, y)) return "Select the track (drop a sample on it to load it there).";
-            if (muteBtn(t).in(x, y)) return "ON / OFF: mute the track without losing its steps.";
-            if (trigBtn(t).in(x, y)) return "PLAY: hear the track while you hold the mouse button (MIDI C3 to D#3 play tracks 1 to 4).";
-            if (rowBtn(t).in(x, y)) return "Select the track; the number is its length and speed.";
-            for (int i = 0; i < 16; ++i) if (stepCell(t, i).in(x, y))
-                return "Click: a note on this step (drag to paint). Right-click: lock knobs on this step (SLICE, PITCH, POSITION... any knob).";
+            if (soloBtn(t).in(x, y)) return "SOLO: hear only the soloed tracks.";
+            if (muteBtn(t).in(x, y)) return "MUTE: silence the track without losing its steps.";
+            if (trackTab(t).in(x, y)) return "Select the track (drop a sample on it to load it there).";
         }
-        if (waveR().in(x, y)) return liveTrack(selTrack) ? "LIVE: the last bars of the input (right = now). Click: where the play head starts (POSITION)."
-                                                         : "Click: the slice under the mouse and where the play head starts in it. Drag: move the start.";
+        if (waveR().in(x, y)) return liveTrack(selTrack) ? "LIVE: the last bars of the input (right = now). Drag the S / E flags: START and END; click elsewhere: POSITION."
+                                                         : "Drag the S / E flags: START and END of what plays. Click: the slice under the mouse and the start (POSITION). Green lines: the voices playing.";
         if (loadBtn().in(x, y)) return "Load a WAV or AIFF file on the selected track (or drop one on the window).";
         if (matBtn().in(x, y)) return "Built-in materials to play without your own samples, or LIVE: the audio input, granulated as it comes. Click = next, right-click = previous (SAMPLE = your file).";
-        if (captureBtn().in(x, y)) return "CAPTURE: the last bars of the input (complete bars while playing, see CAPTURE at the top) become this track's sample, sliced and saved with the project.";
+        if (captureBtn().in(x, y)) return "CAPTURE: the last bars of the input (see CAPTURE at the top) become this track's sample, sliced and saved with the project.";
         if (modeBtn().in(x, y)) return std::string(kModeHelp[bank->kit[selTrack].mode % kGrainModes]) + ". Click = next mode, right-click = previous.";
         if (syncBtn().in(x, y)) return "SYNC: SIZE in note values (1/64 to 2 bars); in CLOUD, regular grains fall on the tempo grid.";
-        if (legatoBtn().in(x, y)) return "LEGATO: a step does not start the sound again, it only brings its locks (pitch, position, any knob): the cloud goes on and changes.";
+        if (legatoBtn().in(x, y)) return "LEGATO: a single-note step does not start the sound again, it changes the playing note (pitch, locks, length).";
         if (inBox().in(x, y)) return "Input level. KGRN-4 hears a track routed to its side-chain input (LIVE tracks, CAPTURE).";
         if (freezeBtn().in(x, y)) return "FREEZE: the input buffer stops recording; LIVE tracks keep playing what it holds.";
         if (capLenBox().in(x, y)) return "How much of the input CAPTURE takes and LIVE tracks see: 1, 2, 4 or 8 bars. Click / scroll to change.";
         if (sliceModeBtn().in(x, y)) return "How the sample is cut: at its transients (hits) or into equal slices.";
         if (amtBox().in(x, y) || amtMinus().in(x, y) || amtPlus().in(x, y)) return "TRANSIENTS: sensitivity (more = more slices). EQUAL: number of slices.";
-        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) return "Show steps 1-16, 17-32, 33-48 or 49-64. A page past the end makes the selected track (and the pattern) that long.";
+        for (int i = 0; i < kPages; ++i) if (pageTab(i).in(x, y)) return "Knob pages of the selected track. A dot on LFO 1 / LFO 2: that LFO moves a knob.";
+        for (int i = 0; i < pageCount(); ++i) if (pageKnob(i).in(x, y)) {
+            const int k = kPageStart[page] + i;
+            return std::string(kTP[k].name) + ": " + kTP[k].help + ". Double-click = reset; with a step locked it sets that step only.";
+        }
+        for (int i = 0; i < kFxPages; ++i) if (fxTab(i).in(x, y)) return "ECHO and REVERB are fed by each track's DELAY / REVERB sends (FX page); CHORUS and MASTER work on the whole mix.";
+        for (int i = 0; i < fxCount(); ++i) if (fxKnob(i).in(x, y)) return std::string(fxName(fxG(i))) + ". Double-click = reset.";
+        for (int i = 0; i < kLanes; ++i) if (laneBtn(i).in(x, y)) {
+            static const char* t[kLanes] = {"TRIG: click = a note on the step (drag to paint). Right-click: lock knobs on this step.",
+                                            "NOTE: drag a step up / down (semitones), double-click = C3 (the sample's pitch); the keyboard sets the selected step.",
+                                            "LEN: drag a step up / down: how long its note lasts (HOLD = until the next note).",
+                                            "CHORD: click = next chord, right-click = previous: the step plays several voices.",
+                                            "RATCH: click = more repeats in the step, right-click = fewer.",
+                                            "COND: when the step plays: chance, FILL, first loop, every n loops."};
+            return t[i];
+        }
+        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) return "Show steps 1-16, 17-32, 33-48 or 49-64. A page past the end makes the track (and the pattern) that long.";
+        for (int i = 0; i < 16; ++i) if (stepCell(i).in(x, y)) return "Edit the step for the lane chosen above. Right-click (TRIG / NOTE / LEN): lock knobs on this step.";
         if (chainBtn().in(x, y)) return "CHAIN: play a list of patterns in a loop, each a number of times.";
         if (lenBox().in(x, y) || lenMinus().in(x, y) || lenPlus().in(x, y)) return "Length of the selected track (1-64 steps): tracks of different lengths drift against each other.";
         if (speedBtn().in(x, y)) return "Speed of the selected track's steps (1x = 16ths). Click = next, right-click = previous.";
-        if (rotL().in(x, y) || rotR().in(x, y)) return "Shift the selected track's steps (and their locks) one step left or right.";
-        if (fillBtn().in(x, y)) return "A note on every step of the selected track.";
+        if (rotL().in(x, y) || rotR().in(x, y)) return "Shift the selected track's steps (notes, locks) one step earlier or later.";
+        if (allOnBtn().in(x, y)) return "A note on every step of the selected track.";
+        if (lockClrAll().in(x, y)) return "Remove every lock of the selected track in this pattern.";
         if (clearTrackBtn().in(x, y)) return "Clear the selected track's steps and locks.";
-        if (copyTrackBtn().in(x, y) || pasteTrackBtn().in(x, y)) return "Copy the selected track's steps and locks, then paste them on another track or pattern.";
+        if (copyTrackBtn().in(x, y) || pasteTrackBtn().in(x, y)) return "Copy the selected track's steps, notes and locks, then paste them on another track or pattern.";
+        if (octDown().in(x, y) || octUp().in(x, y) || octBox().in(x, y)) return "Octave of the keyboard.";
+        if (keyAt(x, y) >= 0) return "Play the selected track (6 voices). In the NOTE lane it also sets the selected step's note.";
+        if (notesOffBtn().in(x, y)) return "Stop every sounding note.";
+        if (fillHoldBtn().in(x, y)) return "FILL while held: steps with the FILL / !FILL condition change (MIDI B2 on channel 1 too). Right-click = latch.";
         if (patLenBox().in(x, y)) return "Pattern length (16ths): a pattern chosen while playing starts when this length ends. Drag or scroll.";
         if (swingBox().in(x, y)) return "Swing: delays every second 16th (50% = straight). Drag or scroll.";
         if (playBtn().in(x, y)) return "Internal play when your music software is stopped (KGRN-4 follows its transport when it plays).";
         if (tempoBox().in(x, y)) return "Internal tempo. Drag or scroll.";
-        for (int k = 0; k < kTrackParams; ++k) if (knobR(k).in(x, y)) return std::string(kTP[k].name) + ": " + kTP[k].help + ". Double-click = reset; with a step locked it sets that step only.";
-        for (int i = 0; i < 5; ++i) if (gKnob(i).in(x, y)) {
-            static const char* t[5] = {"Reverb decay time.", "Reverb brightness.", "Output level of KGRN-4.", "Echo time in tempo.", "Echo repeats (ping-pong)."};
-            return t[i];
-        }
         for (int i = 0; i < kPatterns; ++i) if (patBtn(i).in(x, y)) return "Choose the pattern (while playing it starts at the end of the current one). MIDI C4 to D#5 choose A01 to A16.";
         if (undoBtn().in(x, y)) return "Undo the last change (Ctrl/Cmd+Z). Right-click = redo. Loading a sample is not undone.";
         if (presetBtn().in(x, y)) return "Factory presets and your own.";
@@ -1392,12 +1583,32 @@ protected:
         if (logoArea().in(x, y)) return "About KGRN-4, updates and licence.";
         return std::string();
     }
-
     // ------------------------------------------------------------------ editing
     void setStep(int t, int s, bool on)
     {
         if ((pat().on[t][s] != 0) == on) return;
         char b[48]; std::snprintf(b, sizeof(b), "s %d %d %d %d", editPattern(), t, s, on ? 1 : 0); sendCmd(b);
+    }
+    // a step's note / gate / chord / ratchet / condition (editing one of them also turns the step on)
+    void setStepData(int s, int note, int gate, int chord, int ratch, int cond)
+    {
+        const int t = selTrack, p = editPattern();
+        char b[96]; std::string c;
+        if (!pat().on[t][s]) { std::snprintf(b, sizeof(b), "s %d %d %d 1\n", p, t, s); c += b; }
+        std::snprintf(b, sizeof(b), "N %d %d %d %d %d %d %d %d", p, t, s, clampi(note, 0, 127), clampi(gate, 0, kGateCount - 1), clampi(chord, 0, kChordCount - 1),
+                      clampi(ratch, 0, kRatchCount - 1), clampi(cond, 0, kNumConds - 1));
+        c += b; sendLines(c);
+    }
+    void setStepNote(int s, int n) { const Pattern& P = pat(); const int t = selTrack; setStepData(s, n, P.gate[t][s], P.chord[t][s], P.ratch[t][s], P.cond[t][s]); }
+    void setStepGate(int s, int g) { const Pattern& P = pat(); const int t = selTrack; setStepData(s, P.note[t][s], g, P.chord[t][s], P.ratch[t][s], P.cond[t][s]); }
+    void stepExtra(int s, bool right, bool dbl)
+    {
+        const Pattern& P = pat(); const int t = selTrack;
+        int ch = P.chord[t][s], ra = P.ratch[t][s], co = P.cond[t][s];
+        if (lane == lnChord) ch = dbl ? 0 : (ch + (right ? kChordCount - 1 : 1)) % kChordCount;
+        else if (lane == lnRatch) ra = dbl ? 0 : (ra + (right ? kRatchCount - 1 : 1)) % kRatchCount;
+        else co = dbl ? 0 : (co + (right ? kNumConds - 1 : 1)) % kNumConds;
+        setStepData(s, P.note[t][s], P.gate[t][s], ch, ra, co);
     }
     bool knobIsHostParam() const { return !(lockMode() && lockTrack == selTrack); }
     void setKnob(int k, float v)
@@ -1412,7 +1623,63 @@ protected:
     }
     void setTrackLen(int n) { pat().len[selTrack] = (uint8_t)clampi(n, 1, kSteps); sendTrackSettings(selTrack); stepPg = std::min(stepPg, (pat().len[selTrack] - 1) / 16); repaint(); }
     void showPatMsg(const std::string& m) { patMsg = m; patMsgUntil = nowSec() + 2.0; repaint(); }
-    void selectTrack(int t) { selTrack = t; if (lockTrack != t) lockStep = -1; repaint(); }
+    void selectTrack(int t) { if (keyHeld >= 0) { keyNote(selTrack, keyHeld, false); keyHeld = -1; } selTrack = t; if (lockTrack != t) lockStep = -1; noteStep = -1; repaint(); }
+    void setFill(bool on) { if (fillHeld == on) return; fillHeld = on; sendCmd(on ? "fill 1" : "fill 0"); repaint(); }
+    // the waveform: drag S / E (START / END), click = slice + POSITION
+    float waveFrac(float x) const { const R wr = waveR(); return clampf((x - wr.x - 4) / (wr.w - 8), 0.f, 1.f); }
+    void waveSet(float x)
+    {
+        const int t = selTrack;
+        const double f = waveFrac(x);
+        double ra = 0.0, rb = 1.0;
+        const SampleData* s = srcOf(t);
+        const Kit& kit = bank->kit[t];
+        if (!liveTrack(t) && s && !s->pcm.empty()) {
+            const uint32_t frames = (uint32_t)s->pcm.size();
+            sliceRegion(kit, sliceOf(knobValue(tpSLICE), kit.nSlices), frames, ra, rb);
+            ra /= frames; rb /= frames;
+        }
+        const double rl = std::max(1e-6, rb - ra);
+        if (waveHandle == 1) { setKnob(tpSTART, std::round(clampf((float)((f - ra) / rl), 0.f, 1.f) * 127.f)); return; }
+        if (waveHandle == 2) { setKnob(tpEND, std::round(clampf((float)((f - ra) / rl), 0.f, 1.f) * 127.f)); return; }
+        double a, e, p; playRegion(a, e, p);
+        setKnob(tpPOSITION, std::round(clampf((float)((f - a) / std::max(1e-6, e - a)), 0.f, 1.f) * 127.f));
+    }
+    void waveDown(float x)
+    {
+        const int t = selTrack;
+        const R wr = waveR(); const float cols = wr.w - 8;
+        double a, e, p; playRegion(a, e, p);
+        const float xa = wr.x + 4 + (float)a * cols, xe = wr.x + 4 + (float)e * cols;
+        waveHandle = std::fabs(x - xa) < 8.f && std::fabs(x - xa) <= std::fabs(x - xe) ? 1 : (std::fabs(x - xe) < 8.f ? 2 : 0);
+        if (waveHandle == 0 && !liveTrack(t)) {               // a click outside the slice picks the slice under the mouse
+            const SampleData* s = srcOf(t);
+            const Kit& kit = bank->kit[t];
+            const int slice = sliceOf(knobValue(tpSLICE), kit.nSlices);
+            if (s && slice >= 0) {
+                const double f = waveFrac(x);
+                int ns = 0; for (int i = 0; i < kit.nSlices; ++i) if (f * 1e6 >= kit.slice[i]) ns = i;
+                if (ns != slice) setKnob(tpSLICE, std::round(sliceKnob(ns, kit.nSlices)));
+            }
+        }
+        waveSet(x);
+    }
+    void pasteTrack()
+    {
+        const Pattern& c = *trackClip; const int p = editPattern(), t = selTrack, ct = trackClipTrack;
+        std::string cmd, row(kSteps, '0');
+        char b[96];
+        for (int s = 0; s < kSteps; ++s) row[s] = c.on[ct][s] ? '1' : '0';
+        cmd += "clt " + std::to_string(p) + " " + std::to_string(t) + "\n";
+        cmd += "S " + std::to_string(p) + " " + std::to_string(t) + " " + row + "\n";
+        cmd += "L " + std::to_string(p) + " " + std::to_string(t) + " " + std::to_string(c.len[ct]) + " " + std::to_string(c.speed[ct]) + "\n";
+        for (int s = 0; s < kSteps; ++s) {
+            if (!c.stepDefault(ct, s)) { std::snprintf(b, sizeof(b), "N %d %d %d %d %d %d %d %d\n", p, t, s, c.note[ct][s], c.gate[ct][s], c.chord[ct][s], c.ratch[ct][s], c.cond[ct][s]); cmd += b; }
+            for (int k = 0; k < kTrackParams; ++k)
+                if (c.locks[ct][s][k] != kNoLock) { std::snprintf(b, sizeof(b), "k %d %d %d %d %d\n", p, t, s, k, c.locks[ct][s][k]); cmd += b; }
+        }
+        cmd.pop_back(); sendLines(cmd); showPatMsg("pasted"); repaint();
+    }
 
     bool onKeyboard(const KeyboardEvent& ev) override
     {
@@ -1433,7 +1700,7 @@ protected:
             if (ev.key == 'z' || ev.key == 'Z') { if (ev.mod & kModifierShift) redo(); else undo(); return true; }
             if (ev.key == 'y' || ev.key == 'Y') { redo(); return true; }
         }
-        if (ev.press && ev.key == kKeyEscape) { if (overlay != ovNone) overlay = ovNone; else lockStep = -1; repaint(); return true; }
+        if (ev.press && ev.key == kKeyEscape) { if (overlay != ovNone) overlay = ovNone; else { lockStep = -1; noteStep = -1; } repaint(); return true; }
         return false;
     }
 
@@ -1444,11 +1711,12 @@ protected:
         tipBlockUntil = nowSec() + 1.0;
         if (!ev.press) {
             if (drag == dkKnob && knobIsHostParam()) editParameter(tpIndex(selTrack, dragIndex), false);
-            if (drag == dkGlobal) editParameter(kGlobalBase + kFxG[dragIndex], false);
+            if (drag == dkGlobal) editParameter(kGlobalBase + dragIndex, false);
             if (drag == dkTempo) editParameter(kGlobalBase + gTEMPO, false);
             if (drag == dkPatLen || drag == dkSwing) sendPatternSettings();
             if (drag == dkTrackLen) sendTrackSettings(selTrack);
-            if (drag == dkTrig) trigTrack(dragIndex, false);
+            if (drag == dkKey && keyHeld >= 0) { keyNote(selTrack, keyHeld, false); keyHeld = -1; }
+            if (drag == dkFill && !fillLatch) setFill(false);
             if (drag == dkResize) saveView();
             if (drag != dkNone) { drag = dkNone; repaint(); }
             return true;
@@ -1481,44 +1749,28 @@ protected:
         if (swingBox().in(x, y)) { drag = dkSwing; dragY = y; dragStart = pat().swing; return true; }
         // tracks
         for (int t = 0; t < kTracks; ++t) {
-            if (trackBtn(t).in(x, y) || rowBtn(t).in(x, y)) { selectTrack(t); return true; }
+            if (soloBtn(t).in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "O %d %d", t, bank->kit[t].solo ? 0 : 1); sendCmd(b); repaint(); return true; }
             if (muteBtn(t).in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "U %d %d", t, bank->kit[t].mute ? 0 : 1); sendCmd(b); repaint(); return true; }
-            if (trigBtn(t).in(x, y)) { selectTrack(t); drag = dkTrig; dragIndex = t; trigTrack(t, true); repaint(); return true; }
-            for (int i = 0; i < 16; ++i) {
-                if (!stepCell(t, i).in(x, y)) continue;
-                const int s = stepPg * 16 + i;
-                if (s >= pat().len[t]) return true;
-                if (right) {
-                    if (lockStep == s && lockTrack == t) lockStep = -1; else { lockStep = s; lockTrack = t; selTrack = t; }
-                    repaint(); return true;
-                }
-                selectTrack(t);
-                paintVal = pat().on[t][s] == 0;
-                setStep(t, s, paintVal);
-                drag = dkPaint; dragIndex = t;
-                repaint(); return true;
-            }
+            if (trackTab(t).in(x, y)) { selectTrack(t); return true; }
         }
-        // material / wave
-        if (waveR().in(x, y)) { waveClick(x, true); drag = dkWave; repaint(); return true; }
+        // display
+        if (lockMode() && lockClearBtn().in(x, y)) { char b[40]; std::snprintf(b, sizeof(b), "kc %d %d %d", editPattern(), lockTrack, lockStep); sendCmd(b); repaint(); return true; }
+        if (waveR().in(x, y)) { waveDown(x); drag = dkWave; repaint(); return true; }
         if (loadBtn().in(x, y)) { openSampleBrowser(); return true; }
         if (matBtn().in(x, y)) { setMaterial(selTrack, (bank->kit[selTrack].material + (right ? kMatLive : 1)) % (kMatLive + 1)); return true; }
         if (captureBtn().in(x, y)) { captureTo(selTrack); return true; }
         if (modeBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.mode = (uint8_t)((k.mode + (right ? kGrainModes - 1 : 1)) % kGrainModes); sendKit(selTrack); repaint(); return true; }
         if (syncBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.sync = k.sync ? 0 : 1; sendKit(selTrack); repaint(); return true; }
         if (legatoBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.legato = k.legato ? 0 : 1; sendKit(selTrack); repaint(); return true; }
-        if (sliceModeBtn().in(x, y)) {
-            Kit& k = bank->kit[selTrack]; k.sliceMode = k.sliceMode ? 0 : 1; k.sliceAmount = k.sliceMode ? 16 : 50;
-            reslice(selTrack); return true;
-        }
+        if (sliceModeBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.sliceMode = k.sliceMode ? 0 : 1; k.sliceAmount = k.sliceMode ? 16 : 50; reslice(selTrack); return true; }
         if (amtMinus().in(x, y) || amtPlus().in(x, y)) {
             Kit& k = bank->kit[selTrack]; const int d = amtPlus().in(x, y) ? 1 : -1;
             k.sliceAmount = (uint8_t)(k.sliceMode ? clampi(k.sliceAmount + d, 1, kMaxSlices) : clampi(k.sliceAmount + d * 10, 0, 100));
             reslice(selTrack); return true;
         }
-        if (lockMode() && lockClearBtn().in(x, y)) { char b[40]; std::snprintf(b, sizeof(b), "kc %d %d %d", editPattern(), lockTrack, lockStep); sendCmd(b); repaint(); return true; }
-        // knobs
-        for (int k = 0; k < kTrackParams; ++k) if (knobR(k).in(x, y)) {
+        for (int i = 0; i < kPages; ++i) if (pageTab(i).in(x, y)) { page = i; repaint(); return true; }
+        for (int i = 0; i < pageCount(); ++i) if (pageKnob(i).in(x, y)) {
+            const int k = kPageStart[page] + i;
             if (dbl) {
                 if (!knobIsHostParam()) { char b[48]; std::snprintf(b, sizeof(b), "k %d %d %d %d %d", editPattern(), selTrack, lockStep, k, (int)kNoLock); sendCmd(b); }
                 else setParamGesture(tpIndex(selTrack, k), trackDefault(selTrack, k));
@@ -1529,44 +1781,89 @@ protected:
             else if (pat().locks[selTrack][lockStep][k] == kNoLock) setKnob(k, dragStart);
             repaint(); return true;
         }
-        // sequencer toolbar
-        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) { showPage(i); return true; }
+        // effects, patterns, presets
+        for (int i = 0; i < kFxPages; ++i) if (fxTab(i).in(x, y)) { fxPage = i; repaint(); return true; }
+        for (int i = 0; i < fxCount(); ++i) if (fxKnob(i).in(x, y)) {
+            const int g = fxG(i);
+            if (dbl) { setParamGesture(kGlobalBase + g, globalDefault(g)); repaint(); return true; }
+            drag = dkGlobal; dragIndex = g; dragY = y; dragStart = gp(g); editParameter(kGlobalBase + g, true); return true;
+        }
         if (chainBtn().in(x, y)) { overlay = ovChain; repaint(); return true; }
+        for (int i = 0; i < kPatterns; ++i) if (patBtn(i).in(x, y)) { setParamGesture(kGlobalBase + gPATTERN, (float)i); lockStep = -1; noteStep = -1; repaint(); return true; }
+        if (patCopy().in(x, y)) { patClip = editPattern(); showPatMsg("A" + std::to_string(patClip + 1) + " copied"); return true; }
+        if (patPaste().in(x, y) && patClip >= 0) { char b[32]; std::snprintf(b, sizeof(b), "cp %d %d", patClip, editPattern()); sendCmd(b); showPatMsg("pasted"); return true; }
+        if (patClear().in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "cl %d", editPattern()); sendCmd(b); lockStep = -1; repaint(); return true; }
+        if (undoBtn().in(x, y)) { if (right) redo(); else undo(); return true; }
+        if (presetBtn().in(x, y)) { scanUser(); overlay = ovPresets; repaint(); return true; }
+        if (saveBtn().in(x, y)) { scanUser(); openSave(); return true; }
+        if (fillHoldBtn().in(x, y)) {
+            if (right) { fillLatch = !fillHeld; setFill(!fillHeld); }
+            else { fillLatch = false; setFill(true); drag = dkFill; }
+            return true;
+        }
+        // sequencer toolbar
+        for (int i = 0; i < kLanes; ++i) if (laneBtn(i).in(x, y)) { lane = i; repaint(); return true; }
+        for (int i = 0; i < 4; ++i) if (stepPageBtn(i).in(x, y)) { showPage(i); return true; }
         if (lenMinus().in(x, y)) { setTrackLen(pat().len[selTrack] - 1); return true; }
         if (lenPlus().in(x, y)) { setTrackLen(pat().len[selTrack] + 1); return true; }
         if (lenBox().in(x, y)) { drag = dkTrackLen; dragY = y; dragStart = pat().len[selTrack]; return true; }
         if (speedBtn().in(x, y)) { pat().speed[selTrack] = (uint8_t)((pat().speed[selTrack] + (right ? kSpeeds - 1 : 1)) % kSpeeds); sendTrackSettings(selTrack); repaint(); return true; }
         if (rotL().in(x, y) || rotR().in(x, y)) { char b[48]; std::snprintf(b, sizeof(b), "rot %d %d %d", editPattern(), selTrack, rotL().in(x, y) ? -1 : 1); sendCmd(b); repaint(); return true; }
-        if (fillBtn().in(x, y)) {
+        if (allOnBtn().in(x, y)) {
             std::string row(kSteps, '0'); for (int s = 0; s < pat().len[selTrack]; ++s) row[s] = '1';
             sendCmd("S " + std::to_string(editPattern()) + " " + std::to_string(selTrack) + " " + row); repaint(); return true;
         }
-        if (clearTrackBtn().in(x, y)) { char b[32]; std::snprintf(b, sizeof(b), "clt %d %d", editPattern(), selTrack); sendCmd(b); lockStep = -1; repaint(); return true; }
+        if (lockClrAll().in(x, y)) {
+            std::string c; char b[40];
+            for (int s = 0; s < kSteps; ++s) if (pat().hasLocks(selTrack, s)) { std::snprintf(b, sizeof(b), "kc %d %d %d\n", editPattern(), selTrack, s); c += b; }
+            if (!c.empty()) { c.pop_back(); sendLines(c); }
+            lockStep = -1; repaint(); return true;
+        }
+        if (clearTrackBtn().in(x, y)) { char b[32]; std::snprintf(b, sizeof(b), "clt %d %d", editPattern(), selTrack); sendCmd(b); lockStep = -1; noteStep = -1; repaint(); return true; }
         if (copyTrackBtn().in(x, y)) { trackClip.reset(new Pattern(pat())); trackClipTrack = selTrack; showPatMsg("T" + std::to_string(selTrack + 1) + " copied"); return true; }
-        if (pasteTrackBtn().in(x, y) && trackClip) {
-            const Pattern& c = *trackClip; const int p = editPattern(), t = selTrack, ct = trackClipTrack;
-            std::string cmd, row(kSteps, '0');
-            for (int s = 0; s < kSteps; ++s) row[s] = c.on[ct][s] ? '1' : '0';
-            cmd += "clt " + std::to_string(p) + " " + std::to_string(t) + "\n";
-            cmd += "S " + std::to_string(p) + " " + std::to_string(t) + " " + row + "\n";
-            cmd += "L " + std::to_string(p) + " " + std::to_string(t) + " " + std::to_string(c.len[ct]) + " " + std::to_string(c.speed[ct]) + "\n";
-            for (int s = 0; s < kSteps; ++s) for (int k = 0; k < kTrackParams; ++k)
-                if (c.locks[ct][s][k] != kNoLock) cmd += "k " + std::to_string(p) + " " + std::to_string(t) + " " + std::to_string(s) + " " + std::to_string(k) + " " + std::to_string(c.locks[ct][s][k]) + "\n";
-            cmd.pop_back(); sendLines(cmd); showPatMsg("pasted"); repaint(); return true;
+        if (pasteTrackBtn().in(x, y) && trackClip) { pasteTrack(); return true; }
+        // steps
+        for (int i = 0; i < 16; ++i) {
+            if (!stepCell(i).in(x, y)) continue;
+            const int t = selTrack, s = stepPg * 16 + i;
+            if (s >= pat().len[t]) return true;
+            if (right && (lane == lnTrig || lane == lnNote || lane == lnLen)) {
+                if (lockStep == s && lockTrack == t) lockStep = -1; else { lockStep = s; lockTrack = t; }
+                repaint(); return true;
+            }
+            switch (lane) {
+            case lnTrig:
+                paintVal = pat().on[t][s] == 0;
+                setStep(t, s, paintVal);
+                drag = dkPaint;
+                break;
+            case lnNote:
+                noteStep = s;
+                if (dbl) { setStepNote(s, kBaseNote); break; }
+                if (!pat().on[t][s]) setStep(t, s, true);
+                drag = dkStepNote; dragIndex = s; dragY = y; dragStart = pat().note[t][s];
+                break;
+            case lnLen:
+                if (dbl) { setStepGate(s, kDefaultGate); break; }
+                if (!pat().on[t][s]) setStep(t, s, true);
+                drag = dkStepLen; dragIndex = s; dragY = y; dragStart = pat().gate[t][s];
+                break;
+            default: stepExtra(s, right, dbl); break;
+            }
+            repaint(); return true;
         }
-        // right column
-        for (int i = 0; i < kPatterns; ++i) if (patBtn(i).in(x, y)) { setParamGesture(kGlobalBase + gPATTERN, (float)i); lockStep = -1; repaint(); return true; }
-        if (patCopy().in(x, y)) { patClip = editPattern(); showPatMsg("A" + std::to_string(patClip + 1) + " copied"); return true; }
-        if (patPaste().in(x, y) && patClip >= 0) { char b[32]; std::snprintf(b, sizeof(b), "cp %d %d", patClip, editPattern()); sendCmd(b); showPatMsg("pasted"); return true; }
-        if (patClear().in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "cl %d", editPattern()); sendCmd(b); lockStep = -1; repaint(); return true; }
-        for (int i = 0; i < 5; ++i) if (gKnob(i).in(x, y)) {
-            const int g = kFxG[i];
-            if (dbl) { setParamGesture(kGlobalBase + g, globalDefault(g)); repaint(); return true; }
-            drag = dkGlobal; dragIndex = i; dragY = y; dragStart = gp(g); editParameter(kGlobalBase + g, true); return true;
+        // keyboard
+        if (octDown().in(x, y)) { kbOct = std::max(-1, kbOct - 1); repaint(); return true; }
+        if (octUp().in(x, y)) { kbOct = std::min(6, kbOct + 1); repaint(); return true; }
+        if (notesOffBtn().in(x, y)) { setState("cmd", "panic"); return true; }
+        {
+            const int n = keyAt(x, y);
+            if (n >= 0) {
+                keyHeld = n; keyNote(selTrack, n, true); drag = dkKey;
+                if (lane == lnNote && noteStep >= 0 && noteStep < pat().len[selTrack]) setStepNote(noteStep, n);
+                repaint(); return true;
+            }
         }
-        if (undoBtn().in(x, y)) { if (right) redo(); else undo(); return true; }
-        if (presetBtn().in(x, y)) { scanUser(); overlay = ovPresets; repaint(); return true; }
-        if (saveBtn().in(x, y)) { scanUser(); openSave(); return true; }
         return false;
     }
 
@@ -1590,20 +1887,33 @@ protected:
         const float v = dragStart + (dragY - y) * sens;
         switch (drag) {
         case dkKnob: setKnob(dragIndex, v); break;
-        case dkGlobal: setParam(kGlobalBase + kFxG[dragIndex], clampf(v, 0.f, 127.f)); repaint(); break;
+        case dkGlobal: setParam(kGlobalBase + dragIndex, clampf(v, 0.f, 127.f)); repaint(); break;
         case dkTempo: setParam(kGlobalBase + gTEMPO, clampf(std::round((dragStart + (dragY - y) * ((ev.mod & kModifierShift) ? 0.05f : 0.5f)) * 10.f) / 10.f, 40.f, 240.f)); repaint(); break;
         case dkPatLen: pat().length = (uint8_t)clampi((int)std::lround(dragStart + (dragY - y) * 0.15f), 1, kSteps); repaint(); break;
         case dkSwing: pat().swing = (uint8_t)clampi((int)std::lround(dragStart + (dragY - y) * 0.15f), 50, 80); repaint(); break;
         case dkTrackLen: pat().len[selTrack] = (uint8_t)clampi((int)std::lround(dragStart + (dragY - y) * 0.15f), 1, kSteps); repaint(); break;
-        case dkWave: waveClick(x, false); break;
-        case dkPaint: {
-            const int t = dragIndex;
-            for (int i = 0; i < 16; ++i) {
-                const R r = stepCell(t, i);
-                if (x >= r.x && x < r.x + r.w + 4.f) { const int s = stepPg * 16 + i; if (s < pat().len[t]) setStep(t, s, paintVal); break; }
-            }
+        case dkWave: waveSet(x); break;
+        case dkStepNote: {
+            const int n = clampi((int)std::lround(dragStart + (dragY - y) / 6.f), 0, 127);
+            if (n != pat().note[selTrack][dragIndex]) setStepNote(dragIndex, n);
             repaint(); break;
         }
+        case dkStepLen: {
+            const int g = clampi((int)std::lround(dragStart + (dragY - y) / 10.f), 0, kGateCount - 1);
+            if (g != pat().gate[selTrack][dragIndex]) setStepGate(dragIndex, g);
+            repaint(); break;
+        }
+        case dkKey: {
+            const int n = keyAt(x, y);
+            if (n >= 0 && n != keyHeld) { if (keyHeld >= 0) keyNote(selTrack, keyHeld, false); keyHeld = n; keyNote(selTrack, n, true); repaint(); }
+            break;
+        }
+        case dkPaint:
+            for (int i = 0; i < 16; ++i) {
+                const R r = stepCell(i);
+                if (x >= r.x && x < r.x + r.w + 4.5f) { const int s = stepPg * 16 + i; if (s < pat().len[selTrack]) setStep(selTrack, s, paintVal); break; }
+            }
+            repaint(); break;
         default: break;
         }
         return true;
@@ -1614,12 +1924,20 @@ protected:
         const float x = ev.pos.getX() / sx, y = ev.pos.getY() / sx;
         const float d = ev.delta.getY() > 0 ? 1.f : (ev.delta.getY() < 0 ? -1.f : 0.f);
         if (d == 0.f || overlay != ovNone) return false;
-        for (int k = 0; k < kTrackParams; ++k) if (knobR(k).in(x, y)) {
+        for (int i = 0; i < pageCount(); ++i) if (pageKnob(i).in(x, y)) {
+            const int k = kPageStart[page] + i;
             if (knobIsHostParam()) { editParameter(tpIndex(selTrack, k), true); setKnob(k, knobValue(k) + d); editParameter(tpIndex(selTrack, k), false); }
             else setKnob(k, knobValue(k) + d);
             return true;
         }
-        for (int i = 0; i < 5; ++i) if (gKnob(i).in(x, y)) { const int g = kFxG[i]; setParamGesture(kGlobalBase + g, clampf(gp(g) + d, 0.f, 127.f)); repaint(); return true; }
+        for (int i = 0; i < fxCount(); ++i) if (fxKnob(i).in(x, y)) { const int g = fxG(i); setParamGesture(kGlobalBase + g, clampf(gp(g) + d, 0.f, 127.f)); repaint(); return true; }
+        for (int i = 0; i < 16; ++i) if (stepCell(i).in(x, y)) {
+            const int s = stepPg * 16 + i;
+            if (s >= pat().len[selTrack]) return true;
+            if (lane == lnNote) setStepNote(s, pat().note[selTrack][s] + (int)d);
+            else if (lane == lnLen) setStepGate(s, pat().gate[selTrack][s] + (int)d);
+            repaint(); return true;
+        }
         if (tempoBox().in(x, y)) { setParamGesture(kGlobalBase + gTEMPO, clampf(gp(gTEMPO) + d, 40.f, 240.f)); repaint(); return true; }
         if (capLenBox().in(x, y)) { setParamGesture(kGlobalBase + gCAPLEN, (float)clampi((int)std::lround(gp(gCAPLEN)) + (int)d, 0, kCapLens - 1)); repaint(); return true; }
         if (patLenBox().in(x, y)) { pat().length = (uint8_t)clampi(pat().length + (int)d, 1, kSteps); sendPatternSettings(); repaint(); return true; }
@@ -1627,7 +1945,6 @@ protected:
         if (lenBox().in(x, y)) { setTrackLen(pat().len[selTrack] + (int)d); return true; }
         return false;
     }
-
     void uiIdle() override
     {
         if (!tipShown && !tipNone && drag == dkNone && overlay == ovNone && hovX >= 0.f && nowSec() - hovSince > 0.8 && nowSec() > tipBlockUntil) {
@@ -1636,6 +1953,8 @@ protected:
         }
         flushPv();
         if (liveTrack(selTrack) && overlay == ovNone && nowSec() - lastLiveDraw > 0.05) { lastLiveDraw = nowSec(); repaint(); }
+        // voices moving through the material, LFO dots: 30 frames a second while something moves
+        if (overlay == ovNone && nowSec() - lastAnim > 0.033 && ((((uint32_t)std::lround(gp(gOUT_ACTIVE)) >> selTrack) & 1) || lfoActive())) { lastAnim = nowSec(); repaint(); }
         if (updater && (int)updater->getState() != updLastState) { updLastState = (int)updater->getState(); repaint(); }
         if (!patMsg.empty() && nowSec() > patMsgUntil) { patMsg.clear(); repaint(); }
         if (!smpMsg.empty() && nowSec() > smpMsgUntil) { smpMsg.clear(); repaint(); }
@@ -1659,6 +1978,8 @@ private:
     GrainDirect* direct = nullptr;
     double lastLiveDraw = 0.0;
     int selTrack = 0, stepPg = 0, lockTrack = 0, lockStep = -1;
+    int page = 0, fxPage = 0, lane = 0, kbOct = 2, keyHeld = -1, noteStep = -1, waveHandle = 0;
+    bool fillHeld = false, fillLatch = false; double lastAnim = 0.0;
     Overlay overlay = ovNone;
     DragKind drag = dkNone; int dragIndex = 0; float dragY = 0, dragStart = 0; bool paintVal = true;
     uint lastClickTime = 0; float lastX = -100, lastY = -100;

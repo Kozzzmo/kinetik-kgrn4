@@ -23,6 +23,8 @@ public:
     // ---- GrainDirect (UI thread)
     SamplePtr captureInput(int bars) override { return engine->capture(bars); }
     void liveWave(float* mn, float* mx, int cols) override { engine->liveWave(mn, mx, cols); }
+    int voiceHeads(int t, float* out, int max) override { return engine->voiceHeads(t, out, max); }
+    float lfoValue(int t, int i) override { return t >= 0 && t < kTracks && i >= 0 && i < kLfos ? engine->lfoValue(t, i) : 0.f; }
 
     KgrnPlugin()
         : Plugin(kTotalParams, 0, 5)
@@ -42,7 +44,7 @@ public:
 
 protected:
     const char* getLabel() const override { return "KinetikKGRN4"; }
-    const char* getDescription() const override { return "Granular sampler: four sample tracks cut into grains and played by a step sequencer with per-step locks"; }
+    const char* getDescription() const override { return "Polyphonic granular sampler: four sample tracks cut into grains, two LFOs each, played by a step sequencer with notes, chords and per-step locks"; }
     const char* getMaker() const override { return "Kinetik"; }
     const char* getLicense() const override { return "Proprietary"; }
     uint32_t getVersion() const override { return d_version(KN_VER_MAJOR, KN_VER_MINOR, KN_VER_MICRO); }
@@ -79,9 +81,22 @@ protected:
         switch (g) {
         case gREV_SIZE: p.name = "Reverb Size"; p.symbol = "rev_size"; return;
         case gREV_TONE: p.name = "Reverb Tone"; p.symbol = "rev_tone"; return;
+        case gREV_PRE: p.name = "Reverb Pre-delay"; p.symbol = "rev_pre"; return;
+        case gREV_WIDTH: p.name = "Reverb Width"; p.symbol = "rev_width"; return;
+        case gREV_LEVEL: p.name = "Reverb Level"; p.symbol = "rev_level"; return;
         case gDLY_TIME: p.name = "Echo Time"; p.symbol = "dly_time"; return;
         case gDLY_FB: p.name = "Echo Feedback"; p.symbol = "dly_fb"; return;
+        case gDLY_HICUT: p.name = "Echo High Cut"; p.symbol = "dly_hicut"; return;
+        case gDLY_LOCUT: p.name = "Echo Low Cut"; p.symbol = "dly_locut"; return;
+        case gDLY_WIDTH: p.name = "Echo Width"; p.symbol = "dly_width"; return;
+        case gDLY_LEVEL: p.name = "Echo Level"; p.symbol = "dly_level"; return;
+        case gCHO_RATE: p.name = "Chorus Rate"; p.symbol = "cho_rate"; return;
+        case gCHO_DEPTH: p.name = "Chorus Depth"; p.symbol = "cho_depth"; return;
+        case gCHO_MIX: p.name = "Chorus Mix"; p.symbol = "cho_mix"; return;
         case gOUTPUT: p.name = "Output"; p.symbol = "output"; return;
+        case gDRIVE: p.name = "Master Drive"; p.symbol = "drive"; return;
+        case gLOWCUT: p.name = "Master Low Cut"; p.symbol = "lowcut"; return;
+        case gHIGHCUT: p.name = "Master High Cut"; p.symbol = "highcut"; return;
         case gTEMPO: p.name = "Internal Tempo"; p.symbol = "tempo"; p.ranges.min = 40; p.ranges.max = 240; p.unit = "BPM"; return;
         case gPLAY: p.name = "Internal Play"; p.symbol = "play"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
         case gPATTERN: p.name = "Pattern"; p.symbol = "pattern"; p.ranges.max = kPatterns - 1; p.hints |= kParameterIsInteger; return;
@@ -192,13 +207,15 @@ protected:
                 const size_t len = e ? (size_t)(e - s) : std::strlen(s);
                 line.assign(s, len);
                 if (line.rfind("pv ", 0) == 0) { unsigned i = 0; float v = 0.f; if (std::sscanf(line.c_str() + 3, "%u %f", &i, &v) == 2) uiEdit(i, v); }
+                else if (line == "panic") panic.store(true);
                 else if (line == "lic") licensed.store(lic::findInstalled(kProductCode).valid);
-                else if (line.rfind("trig ", 0) == 0 || line.rfind("rel ", 0) == 0) {   // on-screen audition: trig <track> <semis> / rel <track>
+                else if (line.rfind("trig ", 0) == 0 || line.rfind("rel ", 0) == 0) {   // on-screen keyboard: trig <track> <note> / rel <track> <note>
                     const bool on = line[0] == 't';
-                    int t = 0, st = 0; std::sscanf(line.c_str() + (on ? 5 : 4), "%d %d", &t, &st);
-                    const uint32_t packed = ((uint32_t)clampi(t, 0, kTracks - 1) << 16) | ((uint32_t)(clampi(st, -48, 48) + 64) << 1) | (on ? 1u : 0u);
+                    int t = 0, n = kBaseNote; std::sscanf(line.c_str() + (on ? 5 : 4), "%d %d", &t, &n);
+                    const uint32_t packed = ((uint32_t)clampi(t, 0, kTracks - 1) << 16) | ((uint32_t)clampi(n, 0, 127) << 1) | (on ? 1u : 0u);
                     const int w = keyW.load(); if ((w + 1) % 32 != keyR.load()) { keyQ[w] = packed; keyW.store((w + 1) % 32); }
-                } else {
+                } else if (line.rfind("fill ", 0) == 0) fillUi.store(line[5] == '1');
+                else {
                     const int p = applyCommand(*master, line.c_str());
                     if (p == kKitTouched) d |= kKitBit; else if (p >= 0) d |= 1u << p;
                 }
@@ -251,28 +268,29 @@ protected:
             }
         }
         if (srcChanged) updateSources();
-        // live notes: UI auditions, MIDI channel 1 C3..D#3 = tracks 1-4 (C4..D#5 = patterns A01-A16),
-        // channels 2-5 = tracks 1-4 played chromatically (C3 = the track's pitch)
+        // live notes: the UI keyboard, MIDI channel 1 C3..D#3 = tracks 1-4, B2 = FILL (C4..D#5 = patterns A01-A16),
+        // channels 2-5 = tracks 1-4 played chromatically and polyphonically (C3 = the sample's own pitch)
         notes.clear();
         while (keyR.load() != keyW.load() && notes.size() < 256) {
             const int r = keyR.load(); const uint32_t k = keyQ[r]; keyR.store((r + 1) % 32);
-            notes.push_back({0, (int)(k >> 16), (int)((k >> 1) & 127) - 64, 1.f, (k & 1) != 0});
+            notes.push_back({0, (int)(k >> 16), (int)((k >> 1) & 127), 0.9f, (k & 1) != 0});
         }
         for (uint32_t i = 0; i < midiCount && notes.size() < 256; ++i) {
             const MidiEvent& ev = midi[i];
             if (ev.size < 3) continue;
             const uint8_t st = ev.data[0] & 0xF0, ch = ev.data[0] & 0x0F; const int note = ev.data[1];
+            if (st == 0xB0 && (note == 123 || note == 120)) { engine->allNotesOff(); continue; }   // all notes / sound off
             const bool on = st == 0x90 && ev.data[2] > 0, off = st == 0x80 || (st == 0x90 && ev.data[2] == 0);
             if (!on && !off) continue;
             if (ch == 0) {
-                if (note >= 60 && note < 60 + kTracks) notes.push_back({ev.frame, note - 60, 0, on ? ev.data[2] / 127.f : 0.f, on});
+                if (note >= 60 && note < 60 + kTracks) notes.push_back({ev.frame, note - 60, kBaseNote, on ? ev.data[2] / 127.f : 0.f, on});
+                else if (note == 59) midiFill = on;                       // B2 held = FILL
                 else if (on && note >= 72 && note < 72 + kPatterns) engine->midiPattern = note - 72;
-            } else if (ch >= 1 && ch <= kTracks) {
-                const int t = ch - 1;
-                if (on) { liveNote[t] = note; notes.push_back({ev.frame, t, note - 60, ev.data[2] / 127.f, true}); }
-                else if (liveNote[t] == note) { liveNote[t] = -1; notes.push_back({ev.frame, t, 0, 0.f, false}); }
-            }
+            } else if (ch >= 1 && ch <= kTracks)                          // polyphonic: C3 = the sample's own pitch
+                notes.push_back({ev.frame, ch - 1, note, on ? ev.data[2] / 127.f : 0.f, on});
         }
+        if (panic.exchange(false)) engine->allNotesOff();
+        engine->fill = midiFill || fillUi.load(std::memory_order_relaxed);
         if (engine->midiPattern >= 0 && (int)std::lround(engine->global[gPATTERN]) == engine->midiPattern) engine->midiPattern = -1;
         Transport tp;
         const TimePosition& pos = getTimePosition();
@@ -311,7 +329,7 @@ private:
     bool smpSet[kTracks] = {};
     std::atomic<bool> smpDirty{false};
     uint32_t keyQ[32] = {}; std::atomic<int> keyW{0}, keyR{0};
-    int liveNote[kTracks] = {-1, -1, -1, -1};
+    std::atomic<bool> fillUi{false}, panic{false}; bool midiFill = false;
     std::vector<NoteIn> notes;
     uint64_t demoPos = 0; float demoGain = 1.f;
     static constexpr const char* kProductCode = "KGRN-4";

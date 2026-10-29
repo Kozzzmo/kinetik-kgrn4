@@ -1,7 +1,9 @@
-// Kinetik KGRN-4 — engine: 4 granular tracks played by a step sequencer (per-step locks), echo and reverb sends.
+// Kinetik KGRN-4 — engine: 4 polyphonic granular tracks played by a step sequencer (notes, chords, gates, ratchets,
+// conditions, per-step locks) and by MIDI, two LFOs per track, echo / reverb sends, chorus and master section.
 // 0.3: three grain engines per track (CLASSIC / CLOUD / LOOP), stereo material, cubic interpolation, grains that never
-// wrap inside a slice (they read on into the sample and fade out early at its ends), window shapes, reverse / octave /
-// jitter per grain, level normalized by the grains really playing, and a LIVE input buffer (granulated live, captured).
+// wrap, window shapes, reverse / octave / jitter per grain, level normalized by the grains really playing, LIVE input.
+// 0.4: 6 voices per track (ADSR, own filter with envelope), START / END, PITCH MIX, FINE, DRIVE, LFOs, band-limited
+// reading of pitched-up grains, extended effects.
 #pragma once
 #include "Bank.hpp"
 #include "Fx.hpp"
@@ -26,7 +28,8 @@ inline void knDenormalsOff()
 }
 
 struct Transport { bool hostValid = false, hostPlaying = false; double beat = 0, bpm = 120; };
-struct NoteIn { uint32_t frame; int track; int semis; float vel; bool on; };   // live notes (MIDI, UI)
+// live notes (MIDI, UI keyboard): note = MIDI note (kBaseNote = the sample's own pitch)
+struct NoteIn { uint32_t frame; int track; int note; float vel; bool on; };
 
 // grain windows: five shapes the SHAPE knob morphs through (square, triangle, smooth, percussive, reversed percussive)
 struct GrainWindows {
@@ -50,13 +53,16 @@ struct GrainWindows {
 
 class Engine {
 public:
-    static constexpr int kMaxGrains = 48;
+    static constexpr int kMaxGrains = 40;            // per voice
+    static constexpr int kGrainBudget = 128;          // all tracks, all voices: keeps the worst case affordable
+    static constexpr int kSlots = kVoices + 2;        // voices plus room for the ones fading out
     static constexpr int kFine = 24;
     float trackParam[kTracks][kTrackParams];
     float global[kGlobalParams];
     Bank bank;                                   // audio-side copy (the plugin syncs it)
     const SampleData* source[kTracks] = {};      // material of each track (set by the plugin; LIVE tracks use the input)
     const float* inL = nullptr; const float* inR = nullptr;   // the audio input of the next process() (nullptr = none)
+    bool fill = false;                           // FILL held (conditions FILL / !FILL)
     // outputs for the UI
     int outStep = -1; uint32_t outActive = 0; int outPattern = 0;
     float outPos[kTracks] = {-1.f, -1.f, -1.f, -1.f};   // play head of the newest voice, fraction of the material (-1 = silent)
@@ -73,7 +79,7 @@ public:
     void init(double sampleRate)
     {
         sr = (float)sampleRate;
-        dly.init(sr); rev.init(sr);
+        dly.init(sr); rev.init(sr); cho.init(sr);
         liveCap = (int64_t)(kLiveSeconds * sr);
         liveL.assign((size_t)liveCap, 0.f); liveR.assign((size_t)liveCap, 0.f);
         for (int m = 0; m < SampleData::kMips; ++m) {
@@ -85,14 +91,21 @@ public:
     }
     void reset()
     {
-        for (int t = 0; t < kTracks; ++t) { tr[t] = TrackState(); tr[t].rng.s = 0x9E3779B9u * (t + 1); }
-        dly.clear(); rev.clear();
+        for (int t = 0; t < kTracks; ++t) { tr[t] = TrackState(); tr[t].rng.s = 0x9E3779B9u * (t + 1); tr[t].lfoRnd[0] = tr[t].lfoRnd[1] = 0.f; }
+        dly.clear(); rev.clear(); cho.clear();
+        mLoL.y = mLoR.y = 0.f; mHiL.reset(); mHiR.reset();
         wasPlaying = false; usingInternal = false; internalBeat = 0; prevPlayParam = false; lastK16 = INT64_MIN;
+        grains = 0;
     }
 
-    // a note now (UI audition / MIDI): no locks
-    void noteOn(int t, int semis, float vel) { if (t >= 0 && t < kTracks) trig(t, nullptr, semis, vel, true); }
-    void noteOff(int t) { if (t >= 0 && t < kTracks) for (auto& v : tr[t].v) if (v.active && v.live && v.stage < 2) v.stage = 2; }
+    // a note now (UI keyboard / MIDI): no locks, ends with noteOff
+    void noteOn(int t, int note, float vel) { if (t >= 0 && t < kTracks) startNote(t, nullptr, note, vel, true, -1.0); }
+    void noteOff(int t, int note)
+    {
+        if (t < 0 || t >= kTracks) return;
+        for (auto& v : tr[t].v) if (v.active && v.live && v.note == note && v.stage < 2) v.stage = 2;
+    }
+    void allNotesOff() { for (auto& T : tr) for (auto& v : T.v) if (v.active && v.stage < 2) v.stage = 2; }
 
     // ---- the input buffer (UI thread readers: they only look behind the write position)
     int64_t liveWritten() const { return liveW; }
@@ -143,6 +156,14 @@ public:
             mn[c] = lo; mx[c] = hi;
         }
     }
+    // the play heads of a track's sounding voices (fractions of the material), for the display; returns how many
+    int voiceHeads(int t, float* out, int max) const
+    {
+        int n = 0;
+        if (t < 0 || t >= kTracks) return 0;
+        for (auto& v : tr[t].v) if (v.active && v.env > 0.01f && n < max) out[n++] = (float)v.headFrac;
+        return n;
+    }
 
     void process(float* outL, float* outR, uint32_t frames, const Transport& tp, const NoteIn* notes = nullptr, uint32_t nNotes = 0)
     {
@@ -163,8 +184,8 @@ public:
         }
         prevPlayParam = playParam;
         playingNow = playing;
-        if (wasPlaying && !playing) for (auto& T : tr) for (auto& v : T.v) if (v.active && !v.live) v.stage = 3;   // stop: fade out
-        if (restarted) { for (auto& T : tr) T.lastK = INT64_MIN; barW = -1; lastBar = INT64_MIN; }
+        if (wasPlaying && !playing) for (auto& T : tr) { T.ratLeft = 0; for (auto& v : T.v) if (v.active && !v.live && v.stage < 2) v.stage = 2; }   // stop: release
+        if (restarted) { for (auto& T : tr) { T.lastK = INT64_MIN; T.k0 = INT64_MIN; } barW = -1; lastBar = INT64_MIN; }
         const double bpf = bpm / (60.0 * sr);
         const double b1 = b0 + bpf * frames;
         const int want = clampi(midiPattern >= 0 ? midiPattern : (int)global[gPATTERN], 0, kPatterns - 1);
@@ -174,13 +195,22 @@ public:
             curPattern = c >= 0 ? c : want;
         }
         spb = 60.0 * sr / bpm;
-        dly.set(global[gDLY_TIME], global[gDLY_FB], spb);
-        rev.set(global[gREV_SIZE], global[gREV_TONE]);
+        // effects for this block
+        dly.set(global[gDLY_TIME], global[gDLY_FB], spb, global[gDLY_HICUT], global[gDLY_LOCUT], global[gDLY_WIDTH]);
+        rev.set(global[gREV_SIZE], global[gREV_TONE]); rev.setSpace(global[gREV_PRE], global[gREV_WIDTH]);
+        cho.set(global[gCHO_RATE], global[gCHO_DEPTH], global[gCHO_MIX]);
+        const float dlyRet = levelGain(global[gDLY_LEVEL]), revRet = levelGain(global[gREV_LEVEL]);
+        const float mDrive = global[gDRIVE] / 127.f;
+        mLoL.setLP(cutHz(global[gLOWCUT], 10.f, 1200.f), sr); mLoR.a = mLoL.a;
+        const bool loCutOn = global[gLOWCUT] > 0.5f, hiCutOn = global[gHIGHCUT] < 126.5f;
+        if (hiCutOn) { const float hz = cutHz(global[gHIGHCUT], 600.f, 20000.f); mHiL.setup(hz, 0.707f, sr); mHiR.setup(hz, 0.707f, sr); }
         const float outTarget = trimGain(global[gOUTPUT]);
         if (outG < 0.f) outG = outTarget;
         const float sm = 1.f - std::exp(-1.f / (0.02f * sr));
         const bool freeze = global[gFREEZE] > 0.5f;
-        // the input: into the LIVE buffer (unless FROZEN), and its level for the meter
+        bool anySolo = false; for (int t = 0; t < kTracks; ++t) anySolo = anySolo || bank.kit[t].solo;
+        liveMips = false; for (int t = 0; t < kTracks; ++t) liveMips = liveMips || isLive(t);
+        // the input: its level for the meter
         {
             float pk = 0.f;
             if (inL && inR) for (uint32_t i = 0; i < frames; ++i) pk = std::max(pk, std::max(std::fabs(inL[i]), std::fabs(inR[i])));
@@ -194,14 +224,17 @@ public:
             // live notes in this segment
             while (ni < nNotes && notes[ni].frame < pos + n) {
                 const NoteIn& e = notes[ni++];
-                if (e.on) noteOn(e.track, e.semis, e.vel); else noteOff(e.track);
+                if (e.on) noteOn(e.track, e.note, e.vel); else noteOff(e.track, e.note);
             }
             const double beat = b0 + pos * bpf;
             if (playing) {
                 {
                     const Pattern& P = bank.patterns[curPattern];
                     const int64_t k16 = (int64_t)std::floor(beat / 0.25 + 1e-9), len = std::max<int>(1, P.length);
-                    if (lastK16 != INT64_MIN && k16 / len != lastK16 / len) { const int c = chainPl.next(bank.chain); curPattern = c >= 0 ? c : want; }
+                    if (lastK16 != INT64_MIN && k16 / len != lastK16 / len) {
+                        const int c = chainPl.next(bank.chain); const int np = c >= 0 ? c : want;
+                        if (np != curPattern) { curPattern = np; for (auto& T : tr) T.k0 = INT64_MIN; }
+                    }
                 }
                 lastK16 = (int64_t)std::floor(beat / 0.25 + 1e-9);
                 const Pattern& P = bank.patterns[curPattern];
@@ -210,19 +243,35 @@ public:
                     const double sbt = 0.25 / kSpeedMult[P.speed[t] % kSpeeds];
                     const double off = (P.swing / 100.0 * 2.0 - 1.0) * sbt;
                     int64_t k = (int64_t)std::floor(beat / sbt + 1e-9);
-                    const double start = k * sbt + ((k & 1) ? off : 0.0);
-                    if (beat < start) --k;                       // the swung step has not started yet
+                    double start = k * sbt + ((k & 1) ? off : 0.0);
+                    if (beat < start) { --k; start = k * sbt + ((k & 1) ? off : 0.0); }   // the swung step has not started yet
+                    // ratchet repeats of the step that is playing
+                    if (T.ratLeft > 0 && beat >= T.ratNext) {
+                        --T.ratLeft; T.ratNext += T.ratEvery;
+                        playStep(t, P, T.ratStep, T.ratGate);
+                    }
                     if (k < 0 || k == T.lastK) continue;
                     T.lastK = k;
+                    if (T.k0 == INT64_MIN) T.k0 = k;
                     const int step = P.trackStep(t, k);
                     T.step = step;
-                    if (P.on[t][step] && !bank.kit[t].mute) trig(t, P.locks[t][step], 0, 1.f, false);
+                    T.ratLeft = 0;
+                    const bool audible = !bank.kit[t].mute && (!anySolo || bank.kit[t].solo);
+                    if (!P.on[t][step] || !audible) continue;
+                    const int len = P.len[t] ? P.len[t] : 16;
+                    if (!condPasses(T, P.cond[t][step], (k - T.k0) / len)) continue;
+                    const double dur = sbt + ((k & 1) ? -off : off);
+                    const int r = kRatchValues[P.ratch[t][step] % kRatchCount];
+                    const double gateBeats = P.gate[t][step] >= kGateHold ? -1.0 : kGateSteps[P.gate[t][step] % kGateCount] * sbt / (r > 1 ? r : 1);
+                    playStep(t, P, step, gateBeats);
+                    if (r > 1) { T.ratLeft = r - 1; T.ratEvery = dur / r; T.ratNext = start + T.ratEvery; T.ratStep = step; T.ratGate = gateBeats; }
                 }
             } else lastK16 = INT64_MIN;
             outStep = playing ? (int)((int64_t)std::floor(beat / 0.25 * kFine) % (32768LL * kFine)) : -1;
 
-            // per track settings for this segment
-            for (int t = 0; t < kTracks; ++t) setupTrack(t);
+            // per track settings for this segment (LFOs first: they move the knobs)
+            voiceCount = 0;
+            for (int t = 0; t < kTracks; ++t) { runLfos(t, beat, playing, (float)n / sr); setupTrack(t); voiceCount += activeVoices(t); }
             for (uint32_t i = 0; i < n; ++i) {
                 // the input buffer (bar starts are remembered for CAPTURE)
                 if (!freeze) liveWrite(inL ? inL[pos + i] : 0.f, inR ? inR[pos + i] : 0.f);
@@ -234,7 +283,7 @@ public:
                     if (!T.busy) continue;
                     float l = 0.f, r = 0.f;
                     for (auto& v : T.v) if (v.active) renderVoice(t, v, l, r, bt, playing);
-                    if (T.filterOn) { T.fl.tick(l); T.fr.tick(r); l = T.hp ? T.fl.hp : T.fl.lp; r = T.hp ? T.fr.hp : T.fr.lp; }
+                    if (T.drive > 0.001f) { const float g = 1.f + T.drive * 7.f, c = 1.f / std::sqrt(g); l = std::tanh(l * g) * c; r = std::tanh(r * g) * c; }
                     T.vol += (T.volT - T.vol) * sm;
                     l *= T.vol; r *= T.vol;
                     mixL += l; mixR += r;
@@ -243,9 +292,13 @@ public:
                 float el, er, vl, vr;
                 dly.process(dSend, dSendR, el, er);
                 rev.process(rL, rR, vl, vr);
+                float L = mixL + el * dlyRet + vl * revRet, R = mixR + er * dlyRet + vr * revRet;
+                cho.process(L, R);
+                if (mDrive > 0.001f) { const float g = 1.f + mDrive * 5.f, c = 1.f / std::sqrt(g); L = std::tanh(L * g) * c; R = std::tanh(R * g) * c; }
+                if (loCutOn) { L -= mLoL.lp(L); R -= mLoR.lp(R); }
+                if (hiCutOn) { mHiL.tick(L); mHiR.tick(R); L = mHiL.lp; R = mHiR.lp; }
                 outG += (outTarget - outG) * sm;
-                const float L = (mixL + el + vl) * outG, R = (mixR + er + vr) * outG;
-                outL[pos + i] = safety(L); outR[pos + i] = safety(R);
+                outL[pos + i] = safety(L * outG); outR[pos + i] = safety(R * outG);
             }
             pos += n;
         }
@@ -264,7 +317,9 @@ public:
     }
 
     int activeGrains(int t) const { int n = 0; for (auto& v : tr[t].v) if (v.active) n += v.ng; return n; }   // tests
-    void spawnStats(int t, int& all, int& rev, int& oct) const { all = tr[t].nSpawn; rev = tr[t].nRev; oct = tr[t].nOct; }
+    int activeVoices(int t) const { int n = 0; for (auto& v : tr[t].v) if (v.active && v.stage < 3) ++n; return n; }
+    void spawnStats(int t, int& all, int& rev2, int& oct) const { all = tr[t].nSpawn; rev2 = tr[t].nRev; oct = tr[t].nOct; }
+    float lfoValue(int t, int i) const { return tr[t].lfoOut[i]; }
 
 private:
     // where a grain reads: a sample (linear) or the input ring (absolute write positions)
@@ -282,10 +337,18 @@ private:
             return d[i < 0 ? 0 : (i >= m ? m - 1 : i)];
         }
         // cubic (Catmull-Rom) read of one channel at a fractional position (in the level's frames)
+#if defined(__GNUC__)
+        __attribute__((always_inline))
+#endif
         inline float cubic(int lv, const float* d, double pos) const
         {
-            const double fl = std::floor(pos); const int64_t i = (int64_t)fl; const float f = (float)(pos - fl);
-            const float y0 = rd(lv, d, i - 1), y1 = rd(lv, d, i), y2 = rd(lv, d, i + 1), y3 = rd(lv, d, i + 2);
+            int64_t i = (int64_t)pos; if ((double)i > pos) --i;          // floor without a library call
+            const float f = (float)(pos - (double)i);
+            const int64_t m = n[lv];
+            if (ring) { i %= m; if (i < 0) i += m; }
+            float y0, y1, y2, y3;
+            if (i >= 1 && i + 2 < m) { const float* q = d + i; y0 = q[-1]; y1 = q[0]; y2 = q[1]; y3 = q[2]; }   // the usual case
+            else { y0 = rd(lv, d, i - 1); y1 = rd(lv, d, i); y2 = rd(lv, d, i + 1); y3 = rd(lv, d, i + 2); }
             const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
             return ((c3 * f + c2) * f + c1) * f + y1;
         }
@@ -322,39 +385,50 @@ private:
         }
     };
     struct Voice {
-        bool active = false, live = false; int stage = 0;    // 0 attack, 1 hold / decay, 2 release (note off), 3 choke
-        float env = 0.f, vel = 1.f; int semis = 0; uint32_t serial = 0;
+        bool active = false, live = false; int stage = 0;    // 0 attack, 1 decay / sustain, 2 release, 3 choke (fast fade)
+        float env = 0.f, vel = 1.f; int note = kBaseNote; uint32_t serial = 0;
+        double gateLeft = -1.0;                              // frames until the note ends (< 0 = until note off / next note)
+        bool holdGate = false;                               // sequenced HOLD note: ends at the track's next note
         uint8_t lock[kTrackParams];
         double scan = 0.0;                                   // frames moved by SCAN since the note started
         double headFrac = 0.0, liveStart = 0.0;
         float firstSkip = 0.f;
         float timer = 0.f, ltimer[4] = {}, lDet[4] = {}, lPan[4] = {}; bool first = true; int64_t gridK = INT64_MIN;
         Grain g[kMaxGrains]; int ng = 0;
+        float normInv = 1.f; int normWait = 0;
         float normA = 1.f, normP = 1.f;                      // smoothed sum of the windows playing (and of their squares)
+        Svf fl, fr; bool filterOn = false, hp = false;       // the voice's own filter (its envelope moves it)
         // per segment
-        int mode = gmClassic; double ra = 0, rb = 1, head = 0, scanInc = 0, grainInc = 1, sprayFr = 0; float grainLen = 1000.f, overlap = 2.f;
+        int mode = gmClassic; double ra = 0, rb = 1, head = 0, scanInc = 0, grainInc = 1, origInc = 1, sprayFr = 0; float grainLen = 1000.f, overlap = 2.f;
         float incoh = 0.f;                                    // 0 = the grains add up in phase (amplitude sum), 1 = at random (power sum)
-        float shape = 0.5f, jitter = 0.f, reverse = 0.f, octave = 0.f, spread = 0.f; bool random = false, sync = false; double syncBeats = 0.25;
-        float atkInc = 1.f, decCoef = 0.f, relCoef = 0.f; bool hold = true; float panL = 0.707f, panR = 0.707f; int copies = 1;
-        float p(const float* knobs, int k) const { return lock[k] != kNoLock ? (float)lock[k] : knobs[k]; }
+        float shape = 0.5f, jitter = 0.f, reverse = 0.f, octave = 0.f, spread = 0.f, pmix = 1.f; bool random = false, sync = false; double syncBeats = 0.25;
+        float atkInc = 1.f, decCoef = 0.f, sus = 1.f, relCoef = 0.f; float panL = 0.707f, panR = 0.707f; int copies = 1;
+        float fBase = 64.f, fEnv = 0.f, fq = 0.7f;
     };
     struct TrackState {
-        Voice v[2]; int64_t lastK = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
-        bool busy = false, filterOn = false, hp = false; Svf fl, fr; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f;
+        Voice v[kSlots]; int64_t lastK = INT64_MIN, k0 = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
+        bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, drive = 0.f;
         Src src;
+        float mod[kModTargets] = {};                          // LFO offsets in knob units, this segment
+        double lfoPh[kLfos] = {}; float lfoRnd[kLfos] = {}, lfoOut[kLfos] = {}; bool lfoReset[kLfos] = {};
+        int ratLeft = 0, ratStep = 0; double ratNext = 0.0, ratEvery = 0.0, ratGate = 0.0;
         int nSpawn = 0, nRev = 0, nOct = 0;            // tests
     };
     static constexpr uint32_t kSeg = 16;
     float sr = 48000.f; double curBpm = 120.0, spb = 24000.0, freeBeat = 0.0;
     TrackState tr[kTracks];
     GrainWindows win;
-    PingPong dly; Reverb rev;
+    PingPong dly; Reverb rev; Chorus cho;
+    OnePole mLoL, mLoR; Svf mHiL, mHiR;
     int64_t lastK16 = INT64_MIN, lastBar = INT64_MIN;
     int curPattern = 0;
     ChainPlayer chainPl;
     bool wasPlaying = false, usingInternal = false, prevPlayParam = false, playingNow = false;
     double internalBeat = 0, prevB1 = 0;
     float outG = -1.f;
+    int grains = 0;                                         // grains alive (all tracks)
+    int voiceCount = 1;
+    bool liveMips = false;                                     // voices sounding (all tracks), this segment
     // input
     std::vector<float> liveL, liveR; int64_t liveCap = 1, liveW = 0, barW = -1;
     std::vector<float> liveML[SampleData::kMips], liveMR[SampleData::kMips]; int64_t liveMW[SampleData::kMips] = {};
@@ -363,6 +437,7 @@ private:
     {
         const size_t k = (size_t)(liveW % liveCap);
         liveL[k] = l; liveR[k] = r; ++liveW;
+        if (!liveMips) return;                             // the band-limited copies only while a track plays LIVE
         for (int m = 0; m < SampleData::kMips; ++m) {
             float yl = 0.f, yr = 0.f;
             if (!decL[m].push(l, yl)) break;
@@ -383,35 +458,112 @@ private:
     }
     bool isLive(int t) const { return bank.kit[t].material == kMatLive; }
     bool hasSource(int t) const { return isLive(t) ? liveCap > 1 : (source[t] && source[t]->pcm.size() >= 64); }
+    // a knob of a voice: its step's lock or the knob, plus the track's LFOs
+    float kv(const TrackState& T, const Voice& v, const float* knobs, int k) const
+    {
+        float x = v.lock[k] != kNoLock ? (float)v.lock[k] : knobs[k];
+        if (k < kModTargets) x += T.mod[k];
+        return clampf(x, 0.f, 127.f);
+    }
+    bool condPasses(TrackState& T, int c, int64_t loop)
+    {
+        const CondDef& d = kConds[clampi(c, 0, kNumConds - 1)];
+        switch (d.kind) {
+        case ckProb: return T.rng.uni() * 100.f < (float)d.a;
+        case ckFill: return fill;
+        case ckNotFill: return !fill;
+        case ckFirst: return loop == 0;
+        case ckNotFirst: return loop != 0;
+        case ckRatio: return (int)(loop % d.b) == d.a - 1;
+        default: return true;
+        }
+    }
 
-    void trig(int t, const uint8_t* locks, int semis, float vel, bool live)
+    // a sequenced step: its note (or chord), its locks, its length in beats (< 0 = HOLD)
+    void playStep(int t, const Pattern& P, int step, double gateBeats)
+    {
+        const double gateFrames = gateBeats < 0.0 ? -1.0 : gateBeats * spb;
+        const ChordDef& ch = kChords[P.chord[t][step] % kChordCount];
+        TrackState& T = tr[t];
+        // HOLD notes end when the track plays its next note
+        for (auto& v : T.v) if (v.active && !v.live && v.holdGate && v.stage < 2 && !bank.kit[t].legato) v.stage = 2;
+        for (int i = 0; i < ch.n; ++i) startNote(t, P.locks[t][step], P.note[t][step] + ch.notes[i], 1.f, false, gateFrames, ch.n == 1);
+    }
+
+    void startNote(int t, const uint8_t* locks, int note, float vel, bool live, double gateFrames, bool single = true)
     {
         TrackState& T = tr[t];
         if (!hasSource(t)) return;
-        // LEGATO: a step changes the sound (its locks, its pitch) without starting the note again: the cloud goes on
-        if (bank.kit[t].legato && !live) {
+        // LEGATO: a single sequenced note changes the playing one (its locks, its pitch, its length) instead of starting
+        if (bank.kit[t].legato && !live && single) {
             Voice* cur = nullptr;
             for (auto& v : T.v) if (v.active && !v.live && v.stage < 2 && (!cur || v.serial > cur->serial)) cur = &v;
             if (cur) {
                 if (locks) std::memcpy(cur->lock, locks, kTrackParams); else std::memset(cur->lock, kNoLock, kTrackParams);
-                cur->semis = semis; cur->vel = vel;
+                cur->note = note; cur->vel = vel; cur->gateLeft = gateFrames; cur->holdGate = gateFrames < 0.0;
                 return;
             }
         }
-        // the playing voice fades out quickly; the new one takes the other slot (or the quietest)
-        int slot = -1;
-        for (int i = 0; i < 2; ++i) if (!T.v[i].active) { slot = i; break; }
-        if (slot < 0) slot = T.v[0].env < T.v[1].env ? 0 : 1;
-        for (int i = 0; i < 2; ++i) if (i != slot && T.v[i].active) T.v[i].stage = 3;
-        Voice& v = T.v[slot];
-        v.active = true; v.live = live; v.stage = 0; v.env = 0.f; v.vel = vel; v.semis = semis; v.serial = ++T.serial;
+        // a free slot; above kVoices sounding notes the oldest one fades out (stolen)
+        int sounding = 0; Voice* oldest = nullptr;
+        for (auto& v : T.v) if (v.active && v.stage < 3) { ++sounding; if (!oldest || v.serial < oldest->serial) oldest = &v; }
+        if (sounding >= kVoices && oldest) oldest->stage = 3;
+        Voice* slot = nullptr;
+        for (auto& v : T.v) if (!v.active) { slot = &v; break; }
+        if (!slot) {                                        // every slot busy: take the quietest fading one
+            for (auto& v : T.v) if (v.stage == 3 && (!slot || v.env < slot->env)) slot = &v;
+            if (!slot) slot = oldest ? oldest : &T.v[0];
+            grains -= slot->ng; slot->ng = 0;
+        }
+        Voice& v = *slot;
+        v.active = true; v.live = live; v.stage = 0; v.env = 0.f; v.vel = vel; v.note = note; v.serial = ++T.serial;
+        v.gateLeft = gateFrames; v.holdGate = !live && gateFrames < 0.0;
         if (locks) std::memcpy(v.lock, locks, kTrackParams); else std::memset(v.lock, kNoLock, kTrackParams);
-        v.scan = 0.0; v.timer = 0.f; v.ng = 0; v.first = true; v.gridK = INT64_MIN; v.normA = v.normP = 1.f;
+        v.scan = 0.0; v.timer = 0.f; v.first = true; v.gridK = INT64_MIN; v.normA = v.normP = 1.f; v.normWait = 0;
+        v.fl.reset(); v.fr.reset(); v.filterOn = false;
         v.liveStart = (double)liveW;
         for (int j = 0; j < 4; ++j) {                      // LOOP copies: fixed detune / pan for this note
             v.ltimer[j] = -1e9f;                           // set at the first sample (copies staggered)
             v.lDet[j] = j == 0 ? 0.f : T.rng.next();
             v.lPan[j] = j == 0 ? 0.f : (j & 1 ? -1.f : 1.f) * (0.5f + 0.5f * T.rng.uni());
+        }
+        for (int i = 0; i < kLfos; ++i) T.lfoReset[i] = true;    // RETRIG LFOs start again
+    }
+
+    // the two LFOs of a track: their offsets for this segment (knob units, added to the destination)
+    void runLfos(int t, double beat, bool playing, float dt)
+    {
+        TrackState& T = tr[t];
+        for (float& m : T.mod) m = 0.f;
+        const float* knobs = trackParam[t];
+        // the newest voice's locks also lock the LFO knobs
+        const Voice* nv = nullptr;
+        for (auto& v : T.v) if (v.active && (!nv || v.serial > nv->serial)) nv = &v;
+        auto knob = [&](int k) { return nv && nv->lock[k] != kNoLock ? (float)nv->lock[k] : knobs[k]; };
+        for (int i = 0; i < kLfos; ++i) {
+            const int dest = lfoDest(knob(lfoParam(i, 4)));
+            const float depth = (knob(lfoParam(i, 3)) - 64.f) / 63.f;
+            const bool synced = lfoSynced(knob(lfoParam(i, 2))), retrig = lfoRetrig(knob(lfoParam(i, 5)));
+            double ph = T.lfoPh[i];
+            if (T.lfoReset[i] && retrig) ph = 0.0;
+            T.lfoReset[i] = false;
+            const double prev = ph;
+            if (synced && playing && !retrig) ph = beat / (double)kLfoSyncBeats[lfoSyncDiv(knob(lfoParam(i, 1)))];
+            else ph += (synced ? (curBpm / 60.0) / kLfoSyncBeats[lfoSyncDiv(knob(lfoParam(i, 1)))] : lfoHz(knob(lfoParam(i, 1)))) * dt;
+            if (std::floor(ph) != std::floor(prev)) T.lfoRnd[i] = T.rng.next();
+            T.lfoPh[i] = ph;
+            const float x = (float)(ph - std::floor(ph));
+            float y;
+            switch (lfoWave(knob(lfoParam(i, 0)))) {
+            case 0: y = x < 0.5f ? 4.f * x - 1.f : 3.f - 4.f * x; break;
+            case 1: y = std::sin(kTwoPi * x); break;
+            case 2: y = x < 0.5f ? 1.f : -1.f; break;
+            case 3: y = 2.f * x - 1.f; break;
+            case 4: y = 1.f - 2.f * x; break;
+            default: y = T.lfoRnd[i]; break;
+            }
+            T.lfoOut[i] = y * depth;
+            if (dest > 0 && std::fabs(depth) > 0.004f) T.mod[dest - 1] += y * depth * 63.5f;
         }
     }
 
@@ -419,7 +571,7 @@ private:
     {
         TrackState& T = tr[t];
         T.busy = false;
-        if (!hasSource(t)) { for (auto& v : T.v) v.active = false; return; }
+        if (!hasSource(t)) { for (auto& v : T.v) if (v.active) { grains -= v.ng; v.ng = 0; v.active = false; } return; }
         const bool live = isLive(t);
         Src& S = T.src;
         if (live) {
@@ -449,37 +601,49 @@ private:
             if (!v.active) continue;
             T.busy = true;
             if (!newest || v.serial > newest->serial) newest = &v;
+            auto P = [&](int k) { return kv(T, v, knobs, k); };
             v.mode = kit.mode; v.sync = kit.sync != 0;
-            double rl;
+            double ra, rb;
             if (live) {                                    // the window of the input that was there when the note started
                 const double winLen = liveWindow();
-                v.ra = v.liveStart - winLen; v.rb = v.liveStart; rl = winLen;
+                ra = v.liveStart - winLen; rb = v.liveStart;
             } else {
-                const int slice = sliceOf(v.p(knobs, tpSLICE), kit.nSlices);
-                sliceRegion(kit, slice, (uint32_t)S.n[0], v.ra, v.rb);
-                rl = v.rb - v.ra;
+                const int slice = sliceOf(P(tpSLICE), kit.nSlices);
+                sliceRegion(kit, slice, (uint32_t)S.n[0], ra, rb);
             }
-            rl = std::max(64.0, rl);
-            v.scanInc = scanSpeed(v.p(knobs, tpSCAN)) * srcRatio;
-            double hf = v.p(knobs, tpPOSITION) / 127.0 + v.scan / rl;
+            // START / END: the part of the region that plays
+            {
+                double a = P(tpSTART) / 127.0, b = P(tpEND) / 127.0;
+                if (b < a) std::swap(a, b);
+                const double len0 = rb - ra;
+                v.ra = ra + a * len0; v.rb = ra + b * len0;
+                if (v.rb - v.ra < 64.0) v.rb = v.ra + 64.0;
+            }
+            const double rl = std::max(64.0, v.rb - v.ra);
+            v.scanInc = scanSpeed(P(tpSCAN)) * srcRatio;
+            double hf = P(tpPOSITION) / 127.0 + v.scan / rl;
             if (!live) hf -= std::floor(hf);
             v.head = v.ra + hf * rl;
             if (live) {                                    // stay inside what the buffer still holds, never ahead of the input
                 while (v.head > S.hi() - 64.0) { v.head -= rl; v.scan -= rl; }
                 while (v.head < S.lo() + 64.0 && v.head + rl < S.hi()) { v.head += rl; v.scan += rl; }
-                v.headFrac = clampf((float)((v.head - (S.W - rl)) / rl), 0.f, 1.f);
+                const double winLen = liveWindow();
+                v.headFrac = clampf((float)((v.head - (S.W - winLen)) / winLen), 0.f, 1.f);
             } else v.headFrac = v.head / (double)S.n[0];
-            v.grainInc = srcRatio * std::pow(2.0, (pitchSemis(v.p(knobs, tpPITCH)) + v.semis) / 12.0);
-            const float sz = v.p(knobs, tpSIZE);
+            const double semis = pitchSemis(P(tpPITCH)) + (v.note - kBaseNote) + fineCents(P(tpFINE)) / 100.0;
+            v.grainInc = srcRatio * std::pow(2.0, semis / 12.0);
+            v.origInc = srcRatio;
+            v.pmix = P(tpPMIX) / 127.f;
+            const float sz = P(tpSIZE);
             v.syncBeats = kSyncBeats[syncBin(sz)];
             v.grainLen = (float)std::max(48.0, v.sync ? v.syncBeats * spb : (double)grainSec(sz) * sr);
-            const float dn = v.p(knobs, tpDENSITY);
+            const float dn = P(tpDENSITY);
             v.overlap = v.mode == gmClassic ? classicOverlap(dn) : (v.mode == gmCloud ? cloudOverlap(dn) : 1.f);
             v.random = cloudRandom(dn); v.copies = loopCopies(dn);
-            v.shape = v.p(knobs, tpSHAPE) / 127.f;
-            v.sprayFr = spraySec(v.p(knobs, tpSPRAY)) * S.sr;
-            v.jitter = v.p(knobs, tpJITTER) / 127.f; v.reverse = v.p(knobs, tpREVERSE) / 127.f;
-            v.octave = v.p(knobs, tpOCTAVE) / 127.f; v.spread = v.p(knobs, tpSPREAD) / 127.f;
+            v.shape = P(tpSHAPE) / 127.f;
+            v.sprayFr = spraySec(P(tpSPRAY)) * S.sr;
+            v.jitter = P(tpJITTER) / 127.f; v.reverse = P(tpREVERSE) / 127.f;
+            v.octave = P(tpOCTAVE) / 127.f; v.spread = P(tpSPREAD) / 127.f;
             {   // how far apart the grains sounding together read (source frames): a few ms apart = random phases (power sum),
                 // the same place = in phase (amplitude sum); the level is normalized between the two
                 const double gl = v.grainLen, ai = std::fabs(v.grainInc);
@@ -487,34 +651,41 @@ private:
                                 + 2.0 * v.sprayFr + (v.reverse + 0.5f * v.jitter) * gl * ai;
                 if (v.mode == gmClassic && std::fabs(v.scanInc) < 0.05) spreadFr += (1.0 - std::fabs(v.scanInc) / 0.05) * 0.5 * gl * ai;
                 if (v.mode == gmLoop && v.copies > 1) spreadFr += gl * ai / v.copies;
+                if (v.pmix > 0.02f && v.pmix < 0.98f) spreadFr += 0.004 * S.sr;    // two pitches at once never add in phase
                 v.incoh = clampf((float)(spreadFr / (0.004 * S.sr)), 0.f, 1.f);
             }
-            v.atkInc = 1.f / std::max(1.f, attackSec(v.p(knobs, tpATTACK)) * sr);
-            const float dk = v.p(knobs, tpDECAY);
-            v.hold = decayHold(dk);
-            v.decCoef = decayCoef(decaySec(dk), sr);
-            v.relCoef = decayCoef(v.hold ? 0.25f : std::min(decaySec(dk), 2.f), sr);
-            const float pan = (v.p(knobs, tpPAN) - 64.f) / 63.f;
+            v.atkInc = 1.f / std::max(1.f, attackSec(P(tpATTACK)) * sr);
+            v.decCoef = decayCoef(decaySec(P(tpDECAY)), sr);
+            v.sus = P(tpSUSTAIN) / 127.f;
+            v.relCoef = decayCoef(releaseSec(P(tpRELEASE)), sr);
+            const float pan = (P(tpPAN) - 64.f) / 63.f;
             v.panL = std::cos((pan + 1.f) * kPi * 0.25f); v.panR = std::sin((pan + 1.f) * kPi * 0.25f);
+            // the voice's filter, moved by its envelope (FLT ENV): up to 5 octaves either way
+            v.fBase = P(tpFILTER); v.fEnv = (P(tpFLTENV) - 64.f) / 63.f; v.fq = resoQ(P(tpRESO), 0.6f, 12.f);
+            const bool on = std::fabs(v.fBase - 64.f) >= 1.f;
+            if (on && !v.filterOn) { v.fl.reset(); v.fr.reset(); }
+            v.filterOn = on; v.hp = v.fBase > 64.f;
+            if (on) {
+                const float hz = clampf(filterHz(v.fBase) * std::exp2(v.fEnv * 5.f * v.env), 20.f, sr * 0.45f);
+                v.fl.setup(hz, v.fq, sr); v.fr.setup(hz, v.fq, sr);
+            }
         }
         if (!T.busy) return;
-        // the track's filter, level and sends follow its newest note
+        // level, drive and sends follow the newest note
         const Voice& nv = *newest;
-        const float f = nv.p(knobs, tpFILTER);
-        const bool on = std::fabs(f - 64.f) >= 1.f;
-        if (on && !T.filterOn) { T.fl.reset(); T.fr.reset(); }
-        T.filterOn = on; T.hp = f > 64.f;
-        if (on) { const float q = resoQ(nv.p(knobs, tpRESO), 0.6f, 12.f); T.fl.setup(filterHz(f), q, sr); T.fr.setup(filterHz(f), q, sr); }
-        T.volT = volumeGain(nv.p(knobs, tpVOLUME));
+        T.volT = volumeGain(kv(T, nv, knobs, tpVOLUME));
         if (T.vol == 0.f) T.vol = T.volT;
-        const float d = nv.p(knobs, tpDELAY) / 127.f, r = nv.p(knobs, tpREVERB) / 127.f;
+        T.drive = kv(T, nv, knobs, tpDRIVE) / 127.f;
+        const float d = kv(T, nv, knobs, tpDELAY) / 127.f, r = kv(T, nv, knobs, tpREVERB) / 127.f;
         T.dSend = d * d; T.rSend = r * r;
     }
 
     // a new grain from the play head; layer >= 0 = a LOOP copy
     void spawn(TrackState& T, Voice& v, int layer)
     {
-        if (v.ng >= kMaxGrains) return;
+        // with many voices sounding each one gets its share of the budget (the level follows the grains really playing)
+        const int cap = std::min(kMaxGrains, std::max(8, kGrainBudget / std::max(1, voiceCount)));
+        if (v.ng >= cap || grains >= kGrainBudget + 24) return;
         const Src& S = T.src;
         Rng& rng = T.rng;
         const bool loop = v.mode == gmLoop;
@@ -522,9 +693,12 @@ private:
         const double lxf = 0.005 + v.shape * 0.5;                // LOOP: each pass lasts SIZE plus its crossfade
         double len = loop ? v.grainLen * (1.0 + lxf) : (double)v.grainLen, inc = v.grainInc;
         if (!loop && v.jitter > 0.f) len *= 1.0 + 0.5 * v.jitter * rng.next();
+        // PITCH MIX: some grains keep the sample's own pitch
+        const bool pitched = v.pmix >= 0.999f || (v.pmix > 0.001f && rng.uni() < v.pmix);
         float semis = 0.f;
+        if (!pitched) inc = v.origInc;
         if (v.jitter > 0.f) semis += (loop ? (layer > 0 ? v.lDet[layer] * 0.35f * v.jitter : 0.f) : rng.next() * v.jitter * 0.3f);   // up to 30 cents: in tune
-        if (v.octave > 0.f && rng.uni() < v.octave) { semis += rng.uni() < 0.75f ? 12.f : -12.f; ++T.nOct; }
+        if (pitched && v.octave > 0.f && rng.uni() < v.octave) { semis += rng.uni() < 0.75f ? 12.f : -12.f; ++T.nOct; }
         if (semis != 0.f) inc *= std::pow(2.0, semis / 12.0);
         if (v.reverse > 0.f && rng.uni() < v.reverse) inc = -inc;
         // start: the play head, SPRAY, and in CLASSIC a little random spread when frozen (no buzz)
@@ -534,8 +708,8 @@ private:
             const double s = std::fabs(v.scanInc);
             if (s < 0.05) p += (1.0 - s / 0.05) * 0.5 * len * std::fabs(inc) * rng.next();
         }
-        if (!loop && std::fabs(v.grainInc - v.scanInc) > 0.01)    // pitched against the scan: a few ms of random start
-            p += 0.003 * S.sr * rng.next();                        // breaks the comb of evenly spaced grains
+        if (!loop && std::fabs(std::fabs(inc) - std::fabs(v.scanInc)) > 0.01)   // pitched against the scan: a few ms of random start
+            p += 0.003 * S.sr * rng.next();                                        // breaks the comb of evenly spaced grains
         if (inc < 0.0 && !loop) p += 0.5 * len * -inc;            // a reversed grain is centred on the head
         if (inc < 0.0 && loop) p += len * -inc;                    // a reversed loop plays the same stretch backwards
         // the whole grain inside what can be read: near an end its start moves back (never a wrap, never a gap);
@@ -551,7 +725,7 @@ private:
         if (inc < 0.0) avail = (p - lo) / back;
         len = std::min(len, avail);
         if (len < 256.0) return;
-        Grain& g = v.g[v.ng++];
+        Grain& g = v.g[v.ng++]; ++grains;
         ++T.nSpawn; if (inc < 0.0) ++T.nRev;
         int lvl = 0;                                              // the band-limited level this grain reads
         while (lvl + 1 < S.levels && std::fabs(inc) / (double)(1 << lvl) > 1.12) ++lvl;
@@ -590,14 +764,16 @@ private:
     {
         TrackState& T = tr[t];
         const Src& S = T.src;
-        // envelope
+        // the note's length (sequenced gates)
+        if (v.gateLeft >= 0.0 && v.stage < 2) { v.gateLeft -= 1.0; if (v.gateLeft < 0.0) v.stage = 2; }
+        // envelope (ADSR)
         switch (v.stage) {
         case 0: v.env += v.atkInc; if (v.env >= 1.f) { v.env = 1.f; v.stage = 1; } break;
-        case 1: if (!v.hold) v.env *= v.decCoef; break;
+        case 1: v.env = v.sus + (v.env - v.sus) * v.decCoef; break;
         case 2: v.env *= v.relCoef; break;
-        default: v.env -= 1.f / (0.015f * sr); break;
+        default: v.env -= 1.f / (0.008f * sr); break;
         }
-        if (v.env <= 1e-4f && v.stage >= 1) { v.active = false; v.ng = 0; return; }
+        if ((v.env <= 1e-4f && v.stage >= 2) || (v.stage == 1 && v.sus <= 0.0005f && v.env <= 1e-4f)) { grains -= v.ng; v.ng = 0; v.active = false; return; }
         // new grains
         switch (v.mode) {
         case gmClassic:
@@ -626,8 +802,8 @@ private:
                 else v.timer += iv * (1.f + 0.3f * v.jitter * T.rng.next());
             }
             break;
-        default: {                                          // LOOP: each copy restarts its loop every SIZE minus the crossfade
-            const float period = v.grainLen;                 // one pass every SIZE (a note value with SYNC)
+        default: {                                          // LOOP: each copy restarts its loop every SIZE
+            const float period = v.grainLen;
             for (int j = 0; j < v.copies; ++j) {
                 if (v.ltimer[j] < -1e8f) v.ltimer[j] = j == 0 ? 0.f : period * j / v.copies;   // the copies come in staggered
                 v.ltimer[j] -= 1.f;
@@ -651,16 +827,22 @@ private:
             sw += w; sw2 += w * w;
             g.pos += g.inc;
             g.ph += g.dph;
-            if (g.ph >= 1.f) { g = v.g[--v.ng]; continue; }
+            if (g.ph >= 1.f) { g = v.g[--v.ng]; --grains; continue; }
             ++i;
         }
         // level: divided by how many grains really sound (coherent for CLASSIC / LOOP, power for CLOUD)
         const float c = 1.f / (0.03f * sr);
         v.normA += (sw - v.normA) * c; v.normP += (sw2 - v.normP) * c;
-        const float A = std::max(0.f, v.normA), P = std::sqrt(std::max(0.f, v.normP));
-        const float norm = v.incoh >= 0.999f ? P : (v.incoh <= 0.001f ? A : std::pow(A, 1.f - v.incoh) * std::pow(std::max(P, 1e-6f), v.incoh));
-        const float a = v.env * v.vel / std::max(1.f, norm);
-        outL += l * a; outR += r * a;
+        if (--v.normWait <= 0) {                            // the level divider, every 8 samples (it moves over 30 ms)
+            v.normWait = 8;
+            const float A = std::max(0.f, v.normA), P = std::sqrt(std::max(0.f, v.normP));
+            const float norm = v.incoh >= 0.999f ? P : (v.incoh <= 0.001f ? A : std::exp((1.f - v.incoh) * std::log(std::max(A, 1e-6f)) + v.incoh * std::log(std::max(P, 1e-6f))));
+            v.normInv = 1.f / std::max(1.f, norm);
+        }
+        const float a = v.env * v.vel * v.normInv;
+        l *= a; r *= a;
+        if (v.filterOn) { v.fl.tick(l); v.fr.tick(r); l = v.hp ? v.fl.hp : v.fl.lp; r = v.hp ? v.fr.hp : v.fr.lp; }
+        outL += l; outR += r;
     }
 };
 

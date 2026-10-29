@@ -39,6 +39,19 @@ int main()
     check(!deserializeBank(b, "KFX81\n"), "other formats refused");
     applyCommand(a, "C 1 2 4:3 1:1");
     check(deserializeBank(b, serializeBank(a).c_str()) && b.chain.on && b.chain.n == 2 && b.chain.pat[0] == 4 && b.chain.rep[0] == 3, "chain survives");
+    // 0.4: step notes, gates, chords, ratchets, conditions, solo; older banks converted
+    applyCommand(a, "N 3 2 7 67 5 2 3 11"); applyCommand(a, "O 2 1");
+    {
+        const Pattern& P = a.patterns[3];
+        check(P.note[2][7] == 67 && P.gate[2][7] == 5 && P.chord[2][7] == 2 && P.ratch[2][7] == 3 && P.cond[2][7] == 11 && a.kit[2].solo, "N sets the step, O the solo");
+        check(deserializeBank(b, serializeBank(a).c_str()) && same(a, b), "steps and solo round trip");
+        applyCommand(a, "rot 3 2 1"); check(a.patterns[3].note[2][8] == 67 && a.patterns[3].chord[2][8] == 2, "rot moves the step data");
+    }
+    {
+        Bank o; deserializeBank(o, "KGRN43\nS 0 0 1000\nk 0 0 0 4 96\nk 0 0 0 15 30\n");   // 0.3: PITCH +12, DECAY
+        check(o.patterns[0].note[0][0] == kBaseNote + 12 && o.patterns[0].locks[0][0][tpPITCH] == kNoLock, "0.3 banks: a PITCH lock becomes the step's note");
+        check(o.patterns[0].locks[0][0][tpRELEASE] == 30 && o.patterns[0].gate[0][0] == kGateHold, "0.3 banks: DECAY becomes RELEASE, notes last until the next");
+    }
     double ra, rb; Kit k; k.nSlices = 2; k.slice[0] = 0; k.slice[1] = 500000;
     sliceRegion(k, 1, 1000, ra, rb); check(ra == 500 && rb == 1000, "slice region");
     sliceRegion(k, -1, 1000, ra, rb); check(ra == 0 && rb == 1000, "whole sample region");

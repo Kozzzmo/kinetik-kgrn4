@@ -11,7 +11,7 @@ Repository: `Kozzzmo/kinetik-kgrn4` (public, created 2026-10-27; first built loc
 
 | File | Role |
 |---|---|
-| `Params.hpp` | 4 tracks, 64 steps, 16 patterns, 16 knobs per track (`TrackParam`, `kTP` names / defaults / help; groups MATERIAL GRAIN SHAPE MIX), host params `tpIndex(t,k)` = t*16+k, globals after `kGlobalBase` = 64: REV_SIZE REV_TONE DLY_TIME DLY_FB OUTPUT TEMPO PLAY PATTERN, outputs OUT_STEP (1/24 16ths) OUT_ACTIVE OUT_PATTERN OUT_POS1-4 (play head, fraction of the sample, -1 silent); mappings (`scanSpeed`, `grainSec`, `grainRate`, `spraySec`, `attackSec`, `decaySec` + HOLD, `filterHz` bipolar LP/HP, `sliceOf` / `sliceKnob`), `trackValueText` |
+| `Params.hpp` | (0.1 layout, see 0.4.0 below) 4 tracks, 64 steps, 16 patterns, 16 knobs per track (`TrackParam`, `kTP` names / defaults / help; groups MATERIAL GRAIN SHAPE MIX), host params `tpIndex(t,k)` = t*16+k, globals after `kGlobalBase` = 64: REV_SIZE REV_TONE DLY_TIME DLY_FB OUTPUT TEMPO PLAY PATTERN, outputs OUT_STEP (1/24 16ths) OUT_ACTIVE OUT_PATTERN OUT_POS1-4 (play head, fraction of the sample, -1 silent); mappings (`scanSpeed`, `grainSec`, `grainRate`, `spraySec`, `attackSec`, `decaySec` + HOLD, `filterHz` bipolar LP/HP, `sliceOf` / `sliceKnob`), `trackValueText` |
 | `Bank.hpp` | `Pattern` (master length, swing, per track `len` / `speed`, `on`, `locks[t][s][16]`), `Kit` per track (material 0 = own sample / 1-8 built-in, mute, slice mode + amount, `slice[]` starts in millionths of the length); text header `KGRN41`; commands `P L S s k kc M X U cl clt cp rot`; `sliceRegion` |
 | `Engine.hpp` | transport as KFX-8; per track 2 voices (new trig: the old one fades in 15 ms); a voice snapshots its step's locks at the trig (unlocked knobs stay live); play head = region start + POSITION + SCAN travel (wraps in the slice); grains spawned every 1/DENSITY with SPRAY offset, SPREAD = random pan + detune, raised-cosine window (table), first grain of a note starts at full level; AR envelope (DECAY 127 = HOLD until the next note / note off); per track SVF LP/HP, volume, echo / reverb sends; live notes `NoteIn` (MIDI, UI `trig` / `rel`) |
 | `Fx.hpp` | `PingPong` echo (synced, sleeps), `Reverb` (8-line FDN, Hadamard, damping, sleeps) |
@@ -73,3 +73,33 @@ CAPTURE of the last bars + LIVE material, free redesign of the knobs)
 - 17 factory presets (Shimmer Freeze, Grid Cloud, Loop Lab, Live Granulator added). Tests: clicks (second difference on
   a sine near the sample end), level on PAD / VOICE for every mode / size / density, CLASSIC steady level (also frozen),
   LOOP + SYNC periodicity, REVERSE / OCTAVE ratios, stereo, LIVE / FREEZE / CAPTURE, bank conversion, CPU (~10 %).
+
+## 0.4.0 — polyphony, KMSP-style interface (owner: "ajouter de la polyphonie 4 ou 6 voix, revoir l'interface, des LFO,
+étendre les effets, pas fan des 4 séquenceurs, START / END, mix pitch d'origine / transformé")
+
+- `Params.hpp` rewritten (the 0.3 notes above are history): `kVoices = 6`; 40 knobs per track (`TrackParam`): SOURCE
+  START END POSITION SLICE SCAN SPRAY PITCH PMIX, GRAIN SIZE DENSITY SHAPE SPREAD JITTER REVERSE OCTAVE FINE, AMP ATTACK
+  DECAY SUSTAIN RELEASE VOLUME PAN, FX FILTER RESO FLTENV DRIVE DELAY REVERB, LFO 1 / LFO 2 (`lfoParam(i,k)`: WAVE RATE
+  SYNC DEPTH DEST TRIG; DEST 0 = none / 1 + knob < `kModTargets` = 28); pages `kPageNames` / `kPageStart`; per-track
+  defaults `trackDefault`, neutral `trackParamDefault`. Globals: REV SIZE TONE PRE WIDTH LEVEL, DLY TIME FB HICUT LOCUT
+  WIDTH LEVEL, CHO RATE DEPTH MIX, OUTPUT DRIVE LOWCUT HIGHCUT, TEMPO PLAY PATTERN FREEZE CAPLEN, outputs. Step tables as
+  KMSP-6: `kGateSteps` (last = HOLD), `kChords`, `kRatchValues`, `kConds`; `kBaseNote` 60 = the sample's own pitch.
+- `Bank.hpp`: header `KGRN44`; per step `note gate chord ratch cond` (command `N p t s note gate chord ratch cond`),
+  `Kit::solo` (`O t 0/1`, M line has legato + solo); `convertOldLock` maps 0.2 / 0.3 locks (PITCH lock -> step note with
+  HOLD gate, DECAY -> RELEASE), old banks get HOLD gates (a note lasted until the next one).
+- `Engine.hpp`: `kSlots` = 6 voices + 2 fading; stealing chokes the oldest (8 ms); voice = note, ADSR, gate in frames
+  (HOLD = released by the track's next step), own stereo SVF with FLT ENV (5 octaves), locks snapshot; LEGATO with one
+  note updates the newest voice; ratchets (`ratLeft`...), conditions (`condPasses`, `fill`), mute / solo. START / END =
+  sub-region of the slice; PITCH MIX = chance a grain keeps the original rate (`origInc`). `runLfos` per 16-sample
+  segment -> `TrackState::mod[]` added in `kv()`. Grain budget 128 grains shared (`voiceCount` share per voice). Live
+  ring mipmaps only while a track is LIVE (`liveMips`). Master: chorus -> drive -> low / high cut -> output -> safety.
+  `noteOn/noteOff(t, note)`, `allNotesOff`, `voiceHeads`, `lfoValue`, `activeVoices`.
+- Plugin: cmds `trig t note` / `rel t note`, `fill 0/1`, `panic`; MIDI ch 1 B2 = FILL, CC 120 / 123 = all notes off,
+  ch 2-5 polyphonic; `GrainDirect` gained `voiceHeads`, `lfoValue`.
+- UI rebuilt (KMSP-6 layout): track tabs (S / M), display (`drawDisplay`: START / END flags dragged = `waveHandle`,
+  POSITION, voice heads), page tabs + 8 knobs (`pageKnob`, LFO dot on the arc `lfoMod`, LFO scope), FX tabs ECHO / REVERB
+  / CHORUS / MASTER (`fxG`), patterns, presets / save / undo / FILL (HOLD); sequencer lanes (`Lane`), 16 step cells,
+  3-octave keyboard (`keyRect`, `kbOct`, NOTE lane: keys set `noteStep`). User presets `KGRN4-PRESET 3` (1 / 2 remapped).
+- Presets: `PB::row` sets HOLD gates; helpers `chord`, `gate`, `ratch`, `cond`, `lfo`; 19 presets (Grain Chords added).
+- Tests: polyphony / stealing, START / END, PITCH MIX, LFO, LEN, RATCHET, conditions, SOLO, FLT ENV, effects extremes;
+  CPU (16 voices of dense clouds) ~25 % of a core on this VM, limit 40 % (CI machines vary).
