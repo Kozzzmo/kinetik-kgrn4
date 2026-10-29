@@ -187,8 +187,8 @@ jobs:
           gcc -O2 -c src/third_party/monocypher/monocypher-ed25519.c -o /tmp/m2.o
           g++ -O2 -std=c++17 -Isrc tests/license.cpp /tmp/m1.o /tmp/m2.o -o /tmp/license-test && /tmp/license-test
           g++ -O2 -std=c++17 -Isrc tests/update.cpp /tmp/m1.o /tmp/m2.o -o /tmp/update-test && /tmp/update-test
-          g++ -O2 -std=c++17 tests/engine.cpp -o /tmp/engine-test && /tmp/engine-test         # grains, slices, locks, slicer, patterns
-          g++ -O2 -std=c++17 tests/bank.cpp -o /tmp/bank-test && /tmp/bank-test               # bank format, commands, presets play
+          g++ -O2 -std=c++17 -pthread tests/engine.cpp -o /tmp/engine-test && /tmp/engine-test         # grains, slices, locks, slicer, patterns
+          g++ -O2 -std=c++17 -pthread tests/bank.cpp -o /tmp/bank-test && /tmp/bank-test               # bank format, commands, presets play
           ./scripts/check-shared.sh                                                  # files shared with the sister plug-in
       - name: Package
         run: |

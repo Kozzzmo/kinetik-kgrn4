@@ -21,6 +21,11 @@ struct SampleData {
     std::vector<float> pcm;     // mono (the mix of l / r for a stereo sample: slicer, waveform)
     std::vector<float> l, r;    // KGRN-4: the two channels of a stereo sample (empty = mono)
     bool stereo() const { return !l.empty() && l.size() == pcm.size() && r.size() == pcm.size(); }
+    // KGRN-4: band-limited copies at 1/2, 1/4 and 1/8 of the rate (grains pitched up read these: no aliasing).
+    // mipL[k] / mipR[k] = level k + 1; mipR empty for a mono sample (mipL then holds pcm's copies)
+    static constexpr int kMips = 3;
+    std::vector<float> mipL[kMips], mipR[kMips];
+    bool hasMips() const { return !mipL[0].empty(); }
     double sr = 48000.0;
     std::string name;           // file name, for the display
     uint32_t frames() const { return (uint32_t)pcm.size(); }
@@ -172,6 +177,40 @@ inline bool unpack(const uint8_t* d, size_t n, std::vector<int32_t>& x)
     return true;
 }
 
+// half-band low pass (windowed sinc, cut at a quarter of the rate) and decimation by 2, centred (no delay)
+inline void halfDown(const std::vector<float>& in, std::vector<float>& out)
+{
+    static const int kTaps = 31, kH = kTaps / 2;
+    static float h[kTaps] = {}; static bool made = false;
+    if (!made) {
+        double sum = 0;
+        for (int i = 0; i < kTaps; ++i) {
+            const double x = i - kH, w = 0.42 - 0.5 * std::cos(2.0 * 3.141592653589793 * i / (kTaps - 1)) + 0.08 * std::cos(4.0 * 3.141592653589793 * i / (kTaps - 1));
+            const double sinc = x == 0 ? 0.44 : std::sin(3.141592653589793 * 0.44 * x) / (3.141592653589793 * x);
+            h[i] = (float)(sinc * w); sum += h[i];
+        }
+        for (int i = 0; i < kTaps; ++i) h[i] = (float)(h[i] / sum);
+        made = true;
+    }
+    const int n = (int)in.size(), m = (n + 1) / 2;
+    out.assign((size_t)m, 0.f);
+    for (int j = 0; j < m; ++j) {
+        const int c = 2 * j; float acc = 0.f;
+        for (int k = 0; k < kTaps; ++k) { const int i = c + k - kH; if (i >= 0 && i < n) acc += h[k] * in[(size_t)i]; }
+        out[(size_t)j] = acc;
+    }
+}
+inline void buildMips(SampleData& d)
+{
+    const bool st = d.stereo();
+    const std::vector<float>* a = st ? &d.l : &d.pcm;
+    const std::vector<float>* b = st ? &d.r : nullptr;
+    for (int k = 0; k < SampleData::kMips; ++k) {
+        halfDown(*a, d.mipL[k]); a = &d.mipL[k];
+        if (b) { halfDown(*b, d.mipR[k]); b = &d.mipR[k]; } else d.mipR[k].clear();
+    }
+}
+
 inline std::string cleanSampleName(const std::string& n)
 {
     std::string name;
@@ -220,6 +259,7 @@ inline SamplePtr decode(const char* s, size_t n, bool packed = false)
         for (size_t i = 0; i < d->pcm.size(); ++i) d->pcm[i] = (int16_t)(b[i * 2] | b[i * 2 + 1] << 8) / 32768.f;
     }
     if (d->pcm.empty()) return nullptr;
+    buildMips(*d);
     return d;
 }
 inline std::string packChannel(const std::vector<float>& v)
@@ -258,6 +298,7 @@ inline SamplePtr decodeStereo(const char* s, size_t n)
     if (d->l.empty() || d->l.size() != d->r.size()) return nullptr;
     d->pcm.resize(d->l.size());
     for (size_t i = 0; i < d->pcm.size(); ++i) d->pcm[i] = 0.5f * (d->l[i] + d->r[i]);
+    buildMips(*d);
     return d;
 }
 // one line "z<track> <encoded>" ("s<track> ..." for a stereo sample: older versions skip it)

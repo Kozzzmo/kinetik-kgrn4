@@ -45,7 +45,7 @@ static const TrackParamDef kTP[kTrackParams] = {
     {"SIZE",     70,  "Length of each grain (with SYNC: a note value)"},
     {"DENSITY",  64,  "CLASSIC: overlap 2 to 6; CLOUD: centre = few grains, left = regular, right = random, further = more; LOOP: 1 to 4 copies"},
     {"SHAPE",    64,  "Grain window: square, triangle, smooth (centre right), percussive, reversed percussive; LOOP: the crossfade"},
-    {"JITTER",   0,   "Random pitch, length, level and timing of each grain"},
+    {"JITTER",   0,   "Random detune (a few cents, like a chorus), length, level and timing of each grain"},
     {"REVERSE",  0,   "Chance that a grain plays backwards"},
     {"OCTAVE",   0,   "Chance that a grain plays an octave up (mostly) or down: shimmer"},
     {"SPREAD",   30,  "Stereo width of the grains, and a small left / right detune"},
@@ -70,11 +70,24 @@ enum Global {
 static constexpr int kTotalParams = kGlobalBase + kGlobalParams;
 static constexpr int kSavedParams = kGlobalBase + gOUT_STEP;
 inline int tpIndex(int t, int k) { return t * kTrackParams + k; }
-inline float trackParamDefault(int k) { return kTP[k].def; }
+inline float trackParamDefault(int k) { return kTP[k].def; }    // neutral values (tests, a knob without a track)
+// a new instance: each track starts as a different kind of granular sound (PAD cloud, KEYS grain synth,
+// BEAT loops on the 16ths, BELLS grain rain), lively and wide rather than a plain playback
+inline float trackDefault(int t, int k)
+{
+    static const int8_t d[kTracks][kTrackParams] = {
+        // POS SLICE SCAN SPRAY PITCH  SIZE DENS SHAPE JIT REV  OCT SPREAD FILT RESO  ATK DEC  VOL PAN DLY REV
+        {  30,  0,   72,  30,  64,     80, 100,  64,  20,  15,   0,  85,   64,  20,   70, 127,  96, 64,  0, 45 },
+        {  10,  0,   80,  12,  64,     76,  80,  64,  12,   0,   0,  65,   64,  20,   12, 127,  92, 64, 20, 35 },
+        {   0,  0,   96,   0,  64,     48,   0,  10,   0,   0,   0,  25,   64,  20,    0, 127, 100, 64,  0, 12 },
+        {  20,  0,   70,  70,  64,     45, 110,  70,  25,  30,  25, 110,   64,  20,    0, 100,  84, 64, 40, 50 },
+    };
+    return t >= 0 && t < kTracks && k >= 0 && k < kTrackParams ? (float)d[t][k] : trackParamDefault(k);
+}
 inline float globalDefault(int g)
 {
     switch (g) {
-    case gREV_SIZE: return 80.f; case gREV_TONE: return 70.f; case gDLY_TIME: return 88.f; case gDLY_FB: return 60.f;
+    case gREV_SIZE: return 80.f; case gREV_TONE: return 90.f; case gDLY_TIME: return 88.f; case gDLY_FB: return 60.f;
     case gOUTPUT: return 96.f; case gTEMPO: return 120.f; case gOUT_STEP: return -1.f; case gCAPLEN: return 1.f;
     default: return 0.f;
     }

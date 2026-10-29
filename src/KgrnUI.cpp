@@ -52,7 +52,7 @@ public:
         if (s > 1.01) setSize((uint)(W * s), (uint)(H * s));
         setGeometryConstraints((uint)(W * 0.6 * (s > 1.01 ? s : 1.0)), (uint)(H * 0.6 * (s > 1.01 ? s : 1.0)), true, false);
         for (int i = 0; i < kTotalParams; ++i) values[i] = 0.f;
-        for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) values[tpIndex(t, k)] = trackParamDefault(k);
+        for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) values[tpIndex(t, k)] = trackDefault(t, k);
         for (int g = 0; g < kGlobalParams; ++g) values[kGlobalBase + g] = globalDefault(g);
         bank.reset(new Bank());
         bank->initDefault();
@@ -355,6 +355,7 @@ protected:
     R amtPlus() const { return {814.f, 224.f, 24.f, 28.f}; }
     R modeBtn() const { return {444.f, 62.f, 120.f, 22.f}; }
     R syncBtn() const { return {568.f, 62.f, 60.f, 22.f}; }
+    R legatoBtn() const { return {632.f, 62.f, 76.f, 22.f}; }
     R lockClearBtn() const { return {760.f, 64.f, 108.f, 20.f}; }
     // knobs: two rows of ten (SOURCE GRAIN / COLOUR ENV MIX), a gap between groups
     R knobR(int k) const
@@ -582,6 +583,7 @@ protected:
         std::snprintf(b, sizeof(b), "MODE: %s", kModeNames[kit.mode % kGrainModes]);
         button(modeBtn(), b, false, 9.f);
         button(syncBtn(), "SYNC", kit.sync != 0, 9.f);
+        button(legatoBtn(), "LEGATO", kit.legato != 0, 9.f);
         const SampleData* s = srcOf(t);
         const R wr = waveR();
         box(wr, th->lcdBg); frame(wr, th->panelEdge, -1.f, th->panelEdgeWidth);
@@ -1359,6 +1361,7 @@ protected:
         if (captureBtn().in(x, y)) return "CAPTURE: the last bars of the input (complete bars while playing, see CAPTURE at the top) become this track's sample, sliced and saved with the project.";
         if (modeBtn().in(x, y)) return std::string(kModeHelp[bank->kit[selTrack].mode % kGrainModes]) + ". Click = next mode, right-click = previous.";
         if (syncBtn().in(x, y)) return "SYNC: SIZE in note values (1/64 to 2 bars); in CLOUD, regular grains fall on the tempo grid.";
+        if (legatoBtn().in(x, y)) return "LEGATO: a step does not start the sound again, it only brings its locks (pitch, position, any knob): the cloud goes on and changes.";
         if (inBox().in(x, y)) return "Input level. KGRN-4 hears a track routed to its side-chain input (LIVE tracks, CAPTURE).";
         if (freezeBtn().in(x, y)) return "FREEZE: the input buffer stops recording; LIVE tracks keep playing what it holds.";
         if (capLenBox().in(x, y)) return "How much of the input CAPTURE takes and LIVE tracks see: 1, 2, 4 or 8 bars. Click / scroll to change.";
@@ -1503,6 +1506,7 @@ protected:
         if (captureBtn().in(x, y)) { captureTo(selTrack); return true; }
         if (modeBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.mode = (uint8_t)((k.mode + (right ? kGrainModes - 1 : 1)) % kGrainModes); sendKit(selTrack); repaint(); return true; }
         if (syncBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.sync = k.sync ? 0 : 1; sendKit(selTrack); repaint(); return true; }
+        if (legatoBtn().in(x, y)) { Kit& k = bank->kit[selTrack]; k.legato = k.legato ? 0 : 1; sendKit(selTrack); repaint(); return true; }
         if (sliceModeBtn().in(x, y)) {
             Kit& k = bank->kit[selTrack]; k.sliceMode = k.sliceMode ? 0 : 1; k.sliceAmount = k.sliceMode ? 16 : 50;
             reslice(selTrack); return true;
@@ -1517,7 +1521,7 @@ protected:
         for (int k = 0; k < kTrackParams; ++k) if (knobR(k).in(x, y)) {
             if (dbl) {
                 if (!knobIsHostParam()) { char b[48]; std::snprintf(b, sizeof(b), "k %d %d %d %d %d", editPattern(), selTrack, lockStep, k, (int)kNoLock); sendCmd(b); }
-                else setParamGesture(tpIndex(selTrack, k), trackParamDefault(k));
+                else setParamGesture(tpIndex(selTrack, k), trackDefault(selTrack, k));
                 repaint(); return true;
             }
             drag = dkKnob; dragIndex = k; dragY = y; dragStart = knobValue(k);

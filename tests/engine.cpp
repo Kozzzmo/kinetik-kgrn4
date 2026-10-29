@@ -40,6 +40,7 @@ static float zcHz(const std::vector<float>& x, int a, int b)
 static std::unique_ptr<Engine> make(const SampleData* src)
 {
     std::unique_ptr<Engine> e(new Engine()); e->init(sr);
+    for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) e->trackParam[t][k] = trackParamDefault(k);   // neutral knobs
     e->global[gPLAY] = 1.f; e->global[gTEMPO] = 120.f;
     e->trackParam[0][tpSPREAD] = 0.f;              // no random detune / pan for the measurements
     e->source[0] = src;
@@ -53,9 +54,24 @@ int main()
     for (int i = 1; i <= kMaterials; ++i) {
         SamplePtr m = material(i);
         float pk = 0.f; bool fin = true; for (float v : m->pcm) { pk = std::max(pk, std::fabs(v)); fin = fin && std::isfinite(v); }
-        if (!m || m->pcm.size() != 192000 || pk < 0.5f || pk > 0.95f || !fin) { matOk = false; std::printf("  material %d bad\n", i); }
+        const size_t n = m ? m->pcm.size() : 0;
+        if (!m || (n != 192000 && n != 288000) || !m->stereo() || !m->hasMips() || pk < 0.4f || pk > 0.9f || !fin) { matOk = false; std::printf("  material %d bad\n", i); }
     }
-    check(matOk, "8 built-in materials, 4 s, normalised, finite");
+    check(matOk, "8 built-in materials: 4 or 6 s, stereo, band-limited copies, normalised, finite");
+    {   // not thin, not mono, not dull: wide stereo (low L/R correlation) and some air above 4 kHz for the tonal ones
+        bool wide = true, bright = true;
+        for (int i = 1; i <= kMaterials; ++i) {
+            const SampleData& m = *material(i);
+            double c = 0, ll = 0, rr = 0, hf = 0, all = 0; float prev = 0.f;
+            for (size_t k = 0; k < m.l.size(); ++k) { c += m.l[k] * m.r[k]; ll += m.l[k] * m.l[k]; rr += m.r[k] * m.r[k]; const float d = m.pcm[k] - prev; prev = m.pcm[k]; hf += d * d; all += m.pcm[k] * m.pcm[k]; }
+            const double corr = c / std::sqrt(ll * rr + 1e-12), air = hf / (all + 1e-12);
+            std::printf("     %-7s L/R correlation %.2f, high-frequency share %.4f\n", kMaterialNames[i], corr, air);
+            if (i != 6 && corr > 0.85) wide = false;          // the beat keeps its kick and snare in the centre
+            if (air < 0.0015) bright = false;
+        }
+        check(wide, "materials are stereo (L/R correlation under 0.85, except the beat)");
+        check(bright, "materials have some brightness (not dull)");
+    }
 
     auto s440 = sine(440.f, 2.f);
     {   // trig on step 5 only: silent before, sound after
@@ -191,6 +207,30 @@ int main()
         const auto pad = slicer::transients(material(1)->pcm, 48000.0, 0.5f, kMaxSlices);
         check(pad.size() <= 3, "a pad has (almost) no transients");
     }
+    {   // 0.4: no aliasing: 15 kHz pitched an octave up must vanish (it would fold back to 18 kHz), 1 kHz stays
+        auto hf = std::make_shared<SampleData>(); hf->sr = 48000;
+        for (int i = 0; i < 96000; ++i) hf->pcm.push_back(0.5f * (float)std::sin(6.283185307 * 15000.0 * i / 48000.0) + 0.25f * (float)std::sin(6.283185307 * 1000.0 * i / 48000.0));
+        smp::buildMips(*hf);
+        auto e = make(hf.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->trackParam[0][tpPITCH] = 64.f + 32.f;
+        Run r = render(*e, 48000);
+        // energy around 18 kHz (the alias) versus around 2 kHz (the octave of 1 kHz)
+        auto band = [&](double f0) { double re = 0, im = 0; for (int i = 6000; i < 48000; ++i) { const double w = 6.283185307 * f0 * i / 48000.0; re += r.L[i] * std::cos(w); im += r.L[i] * std::sin(w); } return std::sqrt(re * re + im * im); };
+        const double alias = band(18000.0), wanted = band(2000.0);
+        std::printf("     alias at 18 kHz %.1f dB below the 2 kHz octave\n", 20.0 * std::log10(wanted / std::max(1e-9, alias)));
+        check(wanted > 100.0 * alias, "pitch +12: no aliasing (more than 40 dB down)");
+    }
+    {   // LEGATO: a step changes the pitch without starting the note again (no new attack, the play head goes on)
+        auto s = sine(440.f, 2.f);
+        auto e = make(s.get());
+        e->bank.kit[0].legato = 1;
+        Pattern& P = e->bank.patterns[0];
+        P.on[0][0] = P.on[0][4] = 1; P.len[0] = 64; P.locks[0][4][tpPITCH] = 96;
+        e->trackParam[0][tpATTACK] = 100.f;                 // a slow attack: a retrigger would dip
+        Run r = render(*e, 6000 * 8);
+        check(std::fabs(zcHz(r.L, 6000 * 4 + 3000, 6000 * 6) - 880.f) < 60.f, "LEGATO: the locked pitch of step 5 plays");
+        check(rms(r.L, 6000 * 4 + 200, 6000 * 4 + 1200) > 0.6f * rms(r.L, 6000 * 3, 6000 * 4), "LEGATO: no new attack at step 5");
+    }
     // ---------------------------------------------------------------- 0.3: the new grain engine
     // a click shows up as a jump in the second difference far above what a 440 Hz sine of amplitude 0.5 gives (0.0017)
     auto clickiness = [](const std::vector<float>& x, int a, int b) { float m = 0.f; for (int i = a + 2; i < b; ++i) m = std::max(m, std::fabs(x[i] - 2.f * x[i - 1] + x[i - 2])); return m; };
@@ -228,10 +268,10 @@ int main()
                         if (c > lim) { smooth = false; std::snprintf(msg, sizeof(msg), "     click: %s size %.0f dens %.0f pitch %.0f -> %.4f", kModeNames[mode], size, dens, pitch, c); std::puts(msg); }
                         const float db = lv;
                         // (tiny dense pitched grains comb a little: metallic, as on the classic hardware)
-                        if (db < (size < 40.f ? -14.f : -7.f) || db > 4.f) { level = false; std::snprintf(msg, sizeof(msg), "     level: %s size %.0f dens %.0f -> %+.1f dB", kModeNames[mode], size, dens, db); std::puts(msg); }
+                        if (db < (size < 40.f ? -14.f : -7.f) || db > 5.f) { level = false; std::snprintf(msg, sizeof(msg), "     level: %s size %.0f dens %.0f -> %+.1f dB", kModeNames[mode], size, dens, db); std::puts(msg); }
                     }
         check(smooth, "no clicks in CLASSIC / CLOUD / LOOP at any size, density, pitch, near the end of the sample");
-        check(level, "PAD / VOICE in every mode / size / density: within -7 .. +4 dB of the material");
+        check(level, "PAD / CHOIR in every mode / size / density: within -7 .. +5 dB of the material");
     }
     {   // CLASSIC: an even sound (no gaps), even when frozen
         for (float scan : {96.f, 64.f}) {

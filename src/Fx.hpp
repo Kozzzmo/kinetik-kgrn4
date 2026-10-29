@@ -33,15 +33,28 @@ struct Reverb {
     float g[kLines] = {}, z[kLines] = {}, damp = 0.3f, sr = 48000.f;
     std::vector<float> pre; int pw = 0, preLen = 1;
     int quiet = 1 << 30;
+    // 0.4: input diffusion (smears the attacks: no flutter) and two slowly modulated lines (no metallic ringing)
+    struct Ap { std::vector<float> b; int w = 0; float g = 0.7f; inline float tick(float x) { const float d = b[(size_t)w]; const float y = -g * x + d; b[(size_t)w] = x + g * y; if (++w >= (int)b.size()) w = 0; return y; } };
+    Ap dif[4], difS[2]; float mph = 0.f, mdepth = 8.f;
     void init(float sampleRate)
     {
         sr = sampleRate;
         static const float ms[kLines] = {29.7f, 37.1f, 41.1f, 43.7f, 53.3f, 59.9f, 67.7f, 73.1f};
         for (int i = 0; i < kLines; ++i) { len[i] = std::max(8, (int)(ms[i] * 0.001f * sr * 1.6f)); buf[i].assign((size_t)len[i], 0.f); }
         pre.assign((size_t)(0.02f * sr) + 2, 0.f); preLen = (int)pre.size() - 1;
+        static const float dms[4] = {4.77f, 3.59f, 12.73f, 9.31f}, sms[2] = {5.3f, 7.9f};
+        for (int i = 0; i < 4; ++i) { dif[i].b.assign((size_t)std::max(2, (int)(dms[i] * 0.001f * sr)), 0.f); dif[i].g = i < 2 ? 0.75f : 0.625f; }
+        for (int i = 0; i < 2; ++i) { difS[i].b.assign((size_t)std::max(2, (int)(sms[i] * 0.001f * sr)), 0.f); difS[i].g = 0.6f; }
+        mdepth = 0.0004f * sr;
         clear(); set(80.f, 70.f);
     }
-    void clear() { for (int i = 0; i < kLines; ++i) { std::fill(buf[i].begin(), buf[i].end(), 0.f); pos[i] = 0; z[i] = 0.f; } std::fill(pre.begin(), pre.end(), 0.f); pw = 0; quiet = 1 << 30; }
+    void clear()
+    {
+        for (int i = 0; i < kLines; ++i) { std::fill(buf[i].begin(), buf[i].end(), 0.f); pos[i] = 0; z[i] = 0.f; }
+        std::fill(pre.begin(), pre.end(), 0.f); pw = 0; quiet = 1 << 30;
+        for (auto& a : dif) std::fill(a.b.begin(), a.b.end(), 0.f);
+        for (auto& a : difS) std::fill(a.b.begin(), a.b.end(), 0.f);
+    }
     // size knob: decay 0.4 .. 14 s; tone: damping cutoff 1.5 .. 14 kHz
     void set(float sizeKnob, float toneKnob)
     {
@@ -56,10 +69,20 @@ struct Reverb {
         if (inL != 0.f || inR != 0.f) quiet = 0;
         if (asleep()) { outL = outR = 0.f; return; }
         // pre-delay (mono)
-        pre[(size_t)pw] = (inL + inR) * 0.5f; const float x = pre[(size_t)((pw + 1) % (preLen + 1))]; pw = (pw + 1) % (preLen + 1);
-        const float side = (inL - inR) * 0.5f;
+        pre[(size_t)pw] = (inL + inR) * 0.5f; float x = pre[(size_t)((pw + 1) % (preLen + 1))]; pw = (pw + 1) % (preLen + 1);
+        float side = (inL - inR) * 0.5f;
+        for (auto& a : dif) x = a.tick(x);
+        for (auto& a : difS) side = a.tick(side);
         float o[kLines];
         for (int i = 0; i < kLines; ++i) o[i] = buf[i][(size_t)pos[i]];
+        mph += 0.37f / sr; if (mph >= 1.f) mph -= 1.f;
+        for (int k = 0; k < 2; ++k) {                       // lines 1 and 6 read a little earlier / later, slowly
+            const int i = k ? 6 : 1;
+            const float m = mdepth * (1.f + std::sin(kTwoPi * (mph + k * 0.5f)));
+            float p = (float)pos[i] + m; const int L = len[i]; if (p >= (float)L) p -= (float)L;
+            const int a = (int)p; const float f = p - (float)a;
+            o[i] = buf[i][(size_t)a] * (1.f - f) + buf[i][(size_t)((a + 1) % L)] * f;
+        }
         // Hadamard 8x8 (fast, normalised)
         float a[kLines];
         for (int i = 0; i < kLines; ++i) a[i] = o[i];

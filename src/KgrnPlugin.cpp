@@ -71,7 +71,7 @@ protected:
             names[index][3] = (char)std::toupper((unsigned char)names[index][3]);          // "T1 Position"
             std::snprintf(syms[index], sizeof(syms[index]), "t%d_%d", t + 1, k + 1);
             p.name = names[index]; p.shortName = names[index]; p.symbol = syms[index];
-            p.ranges.min = 0; p.ranges.max = 127; p.ranges.def = trackParamDefault(k);
+            p.ranges.min = 0; p.ranges.max = 127; p.ranges.def = trackDefault(t, k);
             return;
         }
         const int g = (int)index - kGlobalBase;

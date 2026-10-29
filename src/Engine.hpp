@@ -65,7 +65,7 @@ public:
 
     Engine()
     {
-        for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) trackParam[t][k] = trackParamDefault(k);
+        for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) trackParam[t][k] = trackDefault(t, k);
         for (int g = 0; g < kGlobalParams; ++g) global[g] = globalDefault(g);
         bank.initDefault();
     }
@@ -76,6 +76,10 @@ public:
         dly.init(sr); rev.init(sr);
         liveCap = (int64_t)(kLiveSeconds * sr);
         liveL.assign((size_t)liveCap, 0.f); liveR.assign((size_t)liveCap, 0.f);
+        for (int m = 0; m < SampleData::kMips; ++m) {
+            liveML[m].assign((size_t)(liveCap >> (m + 1)) + 1, 0.f); liveMR[m].assign(liveML[m].size(), 0.f);
+            liveMW[m] = 0; decL[m] = Dec2(); decR[m] = Dec2();
+        }
         liveW = 0; barW = -1;
         reset();
     }
@@ -221,11 +225,7 @@ public:
             for (int t = 0; t < kTracks; ++t) setupTrack(t);
             for (uint32_t i = 0; i < n; ++i) {
                 // the input buffer (bar starts are remembered for CAPTURE)
-                if (!freeze) {
-                    const size_t k = (size_t)(liveW % liveCap);
-                    liveL[k] = inL ? inL[pos + i] : 0.f; liveR[k] = inR ? inR[pos + i] : 0.f;
-                    ++liveW;
-                }
+                if (!freeze) liveWrite(inL ? inL[pos + i] : 0.f, inR ? inR[pos + i] : 0.f);
                 const double bt = playing ? beat + i * bpf : freeBeat + (pos + i) * bpf;
                 if (playing) { const int64_t bar = (int64_t)std::floor(bt / 4.0 + 1e-9); if (bar != lastBar) { lastBar = bar; barW = liveW; } }
                 float mixL = 0.f, mixR = 0.f, dSend = 0.f, dSendR = 0.f, rL = 0.f, rR = 0.f;
@@ -268,26 +268,59 @@ public:
 
 private:
     // where a grain reads: a sample (linear) or the input ring (absolute write positions)
+    // level 0 = the material itself, levels 1..3 = band-limited copies at 1/2, 1/4, 1/8 of the rate (pitched-up grains
+    // read the level where they move at most ~1 frame per output frame: no aliasing)
+    static constexpr int kLevels = 1 + SampleData::kMips;
     struct Src {
-        const float* l = nullptr; const float* r = nullptr; int64_t n = 0; bool ring = false; double sr = 48000.0;
-        int64_t W = 0; bool growing = false;      // ring: frames written so far, still writing
-        inline float rd(const float* d, int64_t i) const
+        const float* l[kLevels] = {}; const float* r[kLevels] = {}; int64_t n[kLevels] = {}; double off[kLevels] = {};
+        int levels = 1; bool ring = false; double sr = 48000.0;
+        int64_t W = 0; bool growing = false;      // ring: frames written so far (level 0), still writing
+        inline float rd(int lv, const float* d, int64_t i) const
         {
-            if (ring) { int64_t k = i % n; if (k < 0) k += n; return d[k]; }
-            return d[i < 0 ? 0 : (i >= n ? n - 1 : i)];
+            const int64_t m = n[lv];
+            if (ring) { int64_t k = i % m; if (k < 0) k += m; return d[k]; }
+            return d[i < 0 ? 0 : (i >= m ? m - 1 : i)];
         }
-        // cubic (Catmull-Rom) read of one channel at a fractional position
-        inline float cubic(const float* d, double pos) const
+        // cubic (Catmull-Rom) read of one channel at a fractional position (in the level's frames)
+        inline float cubic(int lv, const float* d, double pos) const
         {
             const double fl = std::floor(pos); const int64_t i = (int64_t)fl; const float f = (float)(pos - fl);
-            const float y0 = rd(d, i - 1), y1 = rd(d, i), y2 = rd(d, i + 1), y3 = rd(d, i + 2);
+            const float y0 = rd(lv, d, i - 1), y1 = rd(lv, d, i), y2 = rd(lv, d, i + 1), y3 = rd(lv, d, i + 2);
             const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
             return ((c3 * f + c2) * f + c1) * f + y1;
         }
-        double lo() const { return ring ? (double)std::max<int64_t>(0, W - n + 2048) : 1.0; }      // oldest safe position
-        double hi() const { return ring ? (double)W - 3.0 : (double)n - 3.0; }                      // newest safe position
+        double lo() const { return ring ? (double)std::max<int64_t>(0, W - n[0] + 4096) : 1.0; }    // oldest safe position (level 0 frames)
+        double hi() const { return ring ? (double)W - 256.0 : (double)n[0] - 3.0; }                 // newest safe position
     };
-    struct Grain { double pos, inc; float ph, dph, gl, gr, offR; int8_t wa; float wf, xf; };
+    struct Grain { double pos, inc; float ph, dph, gl, gr, offR; int8_t wa; float wf, xf; int8_t lvl; };
+    // streaming half-band decimator (the input ring's levels): output j is centred on input 2j - 22
+    struct Dec2 {
+        float x[47] = {}; int w = 0, ph = 0;
+        static const float* taps()
+        {
+            static float h[47]; static bool made = false;
+            if (!made) {
+                double sum = 0;
+                for (int i = 0; i < 47; ++i) {
+                    const double t = i - 23, win = 0.42 - 0.5 * std::cos(2.0 * kPi * i / 46.0) + 0.08 * std::cos(4.0 * kPi * i / 46.0);
+                    h[i] = (float)((t == 0 ? 0.45 : std::sin(kPi * 0.45 * t) / (kPi * t)) * win); sum += h[i];
+                }
+                for (float& v : h) v = (float)(v / sum);
+                made = true;
+            }
+            return h;
+        }
+        // push one input; true (with y) every second input
+        inline bool push(float v, float& y)
+        {
+            x[w] = v; w = (w + 1) % 47;
+            if (++ph < 2) return false;
+            ph = 0;
+            const float* h = taps(); float acc = 0.f;
+            for (int k = 0; k < 47; ++k) acc += h[k] * x[(w + k) % 47];
+            y = acc; return true;
+        }
+    };
     struct Voice {
         bool active = false, live = false; int stage = 0;    // 0 attack, 1 hold / decay, 2 release (note off), 3 choke
         float env = 0.f, vel = 1.f; int semis = 0; uint32_t serial = 0;
@@ -324,6 +357,21 @@ private:
     float outG = -1.f;
     // input
     std::vector<float> liveL, liveR; int64_t liveCap = 1, liveW = 0, barW = -1;
+    std::vector<float> liveML[SampleData::kMips], liveMR[SampleData::kMips]; int64_t liveMW[SampleData::kMips] = {};
+    Dec2 decL[SampleData::kMips], decR[SampleData::kMips];
+    inline void liveWrite(float l, float r)
+    {
+        const size_t k = (size_t)(liveW % liveCap);
+        liveL[k] = l; liveR[k] = r; ++liveW;
+        for (int m = 0; m < SampleData::kMips; ++m) {
+            float yl = 0.f, yr = 0.f;
+            if (!decL[m].push(l, yl)) break;
+            decR[m].push(r, yr);
+            const int64_t cap = (int64_t)liveML[m].size();
+            liveML[m][(size_t)(liveMW[m] % cap)] = yl; liveMR[m][(size_t)(liveMW[m] % cap)] = yr; ++liveMW[m];
+            l = yl; r = yr;
+        }
+    }
 
     // above 1 the level bends smoothly towards 1.5 (continuous, no step)
     static inline float safety(float x)
@@ -340,6 +388,16 @@ private:
     {
         TrackState& T = tr[t];
         if (!hasSource(t)) return;
+        // LEGATO: a step changes the sound (its locks, its pitch) without starting the note again: the cloud goes on
+        if (bank.kit[t].legato && !live) {
+            Voice* cur = nullptr;
+            for (auto& v : T.v) if (v.active && !v.live && v.stage < 2 && (!cur || v.serial > cur->serial)) cur = &v;
+            if (cur) {
+                if (locks) std::memcpy(cur->lock, locks, kTrackParams); else std::memset(cur->lock, kNoLock, kTrackParams);
+                cur->semis = semis; cur->vel = vel;
+                return;
+            }
+        }
         // the playing voice fades out quickly; the new one takes the other slot (or the quietest)
         int slot = -1;
         for (int i = 0; i < 2; ++i) if (!T.v[i].active) { slot = i; break; }
@@ -364,12 +422,24 @@ private:
         if (!hasSource(t)) { for (auto& v : T.v) v.active = false; return; }
         const bool live = isLive(t);
         Src& S = T.src;
-        if (live) { S.l = liveL.data(); S.r = liveR.data(); S.n = liveCap; S.ring = true; S.sr = sr; S.W = liveW; S.growing = global[gFREEZE] < 0.5f; }
-        else {
+        if (live) {
+            S.l[0] = liveL.data(); S.r[0] = liveR.data(); S.n[0] = liveCap; S.off[0] = 0.0;
+            for (int m = 0; m < SampleData::kMips; ++m) {
+                S.l[m + 1] = liveML[m].data(); S.r[m + 1] = liveMR[m].data(); S.n[m + 1] = (int64_t)liveML[m].size();
+                S.off[m + 1] = 22.0 * ((1 << (m + 1)) - 1);
+            }
+            S.levels = kLevels; S.ring = true; S.sr = sr; S.W = liveW; S.growing = global[gFREEZE] < 0.5f;
+        } else {
             const SampleData* src = source[t];
             const bool st = src->stereo();
-            S.l = st ? src->l.data() : src->pcm.data(); S.r = st ? src->r.data() : src->pcm.data();
-            S.n = (int64_t)src->pcm.size(); S.ring = false; S.sr = src->sr; S.W = S.n; S.growing = false;
+            S.l[0] = st ? src->l.data() : src->pcm.data(); S.r[0] = st ? src->r.data() : src->pcm.data();
+            S.n[0] = (int64_t)src->pcm.size(); S.off[0] = 0.0; S.levels = 1;
+            if (src->hasMips())
+                for (int m = 0; m < SampleData::kMips; ++m) {
+                    S.l[m + 1] = src->mipL[m].data(); S.r[m + 1] = src->mipR[m].empty() ? src->mipL[m].data() : src->mipR[m].data();
+                    S.n[m + 1] = (int64_t)src->mipL[m].size(); S.off[m + 1] = 0.0; S.levels = m + 2;
+                }
+            S.ring = false; S.sr = src->sr; S.W = S.n[0]; S.growing = false;
         }
         const float* knobs = trackParam[t];
         const Kit& kit = bank.kit[t];
@@ -386,7 +456,7 @@ private:
                 v.ra = v.liveStart - winLen; v.rb = v.liveStart; rl = winLen;
             } else {
                 const int slice = sliceOf(v.p(knobs, tpSLICE), kit.nSlices);
-                sliceRegion(kit, slice, (uint32_t)S.n, v.ra, v.rb);
+                sliceRegion(kit, slice, (uint32_t)S.n[0], v.ra, v.rb);
                 rl = v.rb - v.ra;
             }
             rl = std::max(64.0, rl);
@@ -398,7 +468,7 @@ private:
                 while (v.head > S.hi() - 64.0) { v.head -= rl; v.scan -= rl; }
                 while (v.head < S.lo() + 64.0 && v.head + rl < S.hi()) { v.head += rl; v.scan += rl; }
                 v.headFrac = clampf((float)((v.head - (S.W - rl)) / rl), 0.f, 1.f);
-            } else v.headFrac = v.head / (double)S.n;
+            } else v.headFrac = v.head / (double)S.n[0];
             v.grainInc = srcRatio * std::pow(2.0, (pitchSemis(v.p(knobs, tpPITCH)) + v.semis) / 12.0);
             const float sz = v.p(knobs, tpSIZE);
             v.syncBeats = kSyncBeats[syncBin(sz)];
@@ -453,7 +523,7 @@ private:
         double len = loop ? v.grainLen * (1.0 + lxf) : (double)v.grainLen, inc = v.grainInc;
         if (!loop && v.jitter > 0.f) len *= 1.0 + 0.5 * v.jitter * rng.next();
         float semis = 0.f;
-        if (v.jitter > 0.f) semis += (loop ? (layer > 0 ? v.lDet[layer] * 0.6f * v.jitter : 0.f) : rng.next() * v.jitter * v.jitter * 12.f);
+        if (v.jitter > 0.f) semis += (loop ? (layer > 0 ? v.lDet[layer] * 0.35f * v.jitter : 0.f) : rng.next() * v.jitter * 0.3f);   // up to 30 cents: in tune
         if (v.octave > 0.f && rng.uni() < v.octave) { semis += rng.uni() < 0.75f ? 12.f : -12.f; ++T.nOct; }
         if (semis != 0.f) inc *= std::pow(2.0, semis / 12.0);
         if (v.reverse > 0.f && rng.uni() < v.reverse) inc = -inc;
@@ -483,7 +553,11 @@ private:
         if (len < 256.0) return;
         Grain& g = v.g[v.ng++];
         ++T.nSpawn; if (inc < 0.0) ++T.nRev;
-        g.pos = p; g.inc = inc;
+        int lvl = 0;                                              // the band-limited level this grain reads
+        while (lvl + 1 < S.levels && std::fabs(inc) / (double)(1 << lvl) > 1.12) ++lvl;
+        const double sc = 1.0 / (double)(1 << lvl);
+        g.lvl = (int8_t)lvl;
+        g.pos = (p + S.off[lvl]) * sc; g.inc = inc * sc;
         g.dph = (float)(1.0 / len);
         if (loop) { g.wa = -1; g.xf = (float)(lxf / (1.0 + lxf)); g.wf = 0.f; }
         else { const float a = v.shape * 4.f; g.wa = (int8_t)std::min(3, (int)a); g.wf = a - g.wa; g.xf = 0.f; }
@@ -502,7 +576,7 @@ private:
         float amp = 1.f;
         if (v.jitter > 0.f && !loop) amp -= 0.5f * v.jitter * rng.uni();
         g.gl = v.panL * pl * 1.414f * amp; g.gr = v.panR * pR * 1.414f * amp;
-        g.offR = v.spread * 0.004f * (float)S.sr * rng.next();
+        g.offR = (float)(v.spread * 0.004 * S.sr * rng.next() * sc);
     }
 
     inline float window(const Grain& g) const
@@ -572,8 +646,8 @@ private:
         for (int i = 0; i < v.ng;) {
             Grain& g = v.g[i];
             const float w = window(g);
-            l += S.cubic(S.l, g.pos) * w * g.gl;
-            r += S.cubic(S.r, g.pos + g.offR) * w * g.gr;
+            l += S.cubic(g.lvl, S.l[g.lvl], g.pos) * w * g.gl;
+            r += S.cubic(g.lvl, S.r[g.lvl], g.pos + g.offR) * w * g.gr;
             sw += w; sw2 += w * w;
             g.pos += g.inc;
             g.ph += g.dph;
