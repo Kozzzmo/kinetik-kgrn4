@@ -253,7 +253,7 @@ protected:
             if (lk.owns_lock()) {
                 const uint32_t d = dirty.exchange(0);
                 for (int p = 0; p < kPatterns; ++p) if (d & (1u << p)) engine->bank.patterns[p] = master->patterns[p];
-                if (d & kKitBit) { for (int t = 0; t < kTracks; ++t) engine->bank.kit[t] = master->kit[t]; engine->bank.chain = master->chain; srcChanged = true; }
+                if (d & kKitBit) { for (int t = 0; t < kTracks; ++t) engine->bank.kit[t] = master->kit[t]; engine->bank.chain = master->chain; engine->bank.scale = master->scale; engine->bank.root = master->root; srcChanged = true; }
             }
         }
         // install new samples (the old ones are freed later, outside the audio thread)

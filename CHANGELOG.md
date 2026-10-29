@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- LOOP SYNC per track: a loaded loop plays in time at the tempo (time stretched by the grains, the pitch stays). The
+  button above the waveform turns it on with the number of beats guessed (from a tempo in the file name such as
+  "_174bpm", otherwise the length closest to 120 BPM); right-click or scroll changes the beats. Files named as loops
+  ("loop", "break", "bpm") are synced as soon as they load, and so are the rhythmic built-in materials (BELLS, PLUCKS,
+  BEAT, KEYS). SCAN then sets the speed against the tempo (x1 = in time). The display shows the loop's own tempo.
+- SCALE and ROOT (bottom bar): every grain's pitch (step notes, keys, MIDI, PITCH, LFOs) moves to the nearest note of
+  the scale (major, minor, dorian, phrygian, harmonic minor, pentatonics, blues); notes outside it are dimmed on the keyboard.
+
 ## 0.5.0
 
 - The effects of KDSP-16: ECHO (8 models: digital, tape, BBD, ping-pong, lo-fi, multi-tap, reverse, diffuse, with MOD,

@@ -73,6 +73,7 @@ struct Kit {
     uint8_t sync = 0;                     // SIZE in note values
     uint8_t legato = 0;                   // steps change the locks of the playing note instead of starting a new one
     uint8_t solo = 0;
+    uint8_t beats = 0;                    // LOOP SYNC: the sample is a loop of this many beats (0 = off)
     uint32_t slice[kMaxSlices] = {};      // slice starts, millionths of the sample length (ascending, slice[0] usually 0)
 };
 
@@ -80,7 +81,8 @@ struct Bank {
     Pattern patterns[kPatterns];
     Kit kit[kTracks];
     Chain chain;
-    void initDefault() { for (auto& p : patterns) p.clear(); for (auto& k : kit) k = Kit(); chain = Chain(); }
+    uint8_t scale = 0, root = 0;          // SCALE for every track's grains (0 = off), root pitch class (0 = C)
+    void initDefault() { for (auto& p : patterns) p.clear(); for (auto& k : kit) k = Kit(); chain = Chain(); scale = 0; root = 0; }
 };
 
 static constexpr int kKitTouched = 1000;   // applyCommand: a kit changed
@@ -91,7 +93,7 @@ inline std::string serializeBank(const Bank& b)
     char buf[200];
     for (int t = 0; t < kTracks; ++t) {
         const Kit& k = b.kit[t];
-        std::snprintf(buf, sizeof(buf), "M %d %d %d %d %d %d %d %d %d\n", t, k.material, k.mute, k.sliceMode, k.sliceAmount, k.mode, k.sync, k.legato, k.solo); s += buf;
+        std::snprintf(buf, sizeof(buf), "M %d %d %d %d %d %d %d %d %d %d\n", t, k.material, k.mute, k.sliceMode, k.sliceAmount, k.mode, k.sync, k.legato, k.solo, k.beats); s += buf;
         if (k.nSlices) {
             std::snprintf(buf, sizeof(buf), "X %d %d", t, k.nSlices); s += buf;
             for (int i = 0; i < k.nSlices; ++i) { std::snprintf(buf, sizeof(buf), " %u", k.slice[i]); s += buf; }
@@ -99,6 +101,7 @@ inline std::string serializeBank(const Bank& b)
         }
     }
     if (!b.chain.isDefault()) s += b.chain.line() + "\n";
+    if (b.scale || b.root) { std::snprintf(buf, sizeof(buf), "G %d %d\n", b.scale, b.root); s += buf; }
     for (int p = 0; p < kPatterns; ++p) {
         const Pattern& P = b.patterns[p];
         if (P.isDefault()) continue;
@@ -164,10 +167,11 @@ inline int applyCommand(Bank& b, const char* line)
         P.cond[t][st] = (uint8_t)clampi(v[7], 0, kNumConds - 1);
         return v[0];
     }
-    if (!std::strcmp(op, "M") && std::sscanf(a, "%d %d %d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8]) >= 5 && okT(v[0])) {
+    if (!std::strcmp(op, "G") && std::sscanf(a, "%d %d", &v[0], &v[1]) == 2) { b.scale = (uint8_t)clampi(v[0], 0, kScales - 1); b.root = (uint8_t)clampi(v[1], 0, 11); return kKitTouched; }
+    if (!std::strcmp(op, "M") && std::sscanf(a, "%d %d %d %d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9]) >= 5 && okT(v[0])) {
         Kit& k = b.kit[v[0]];
         k.material = (uint8_t)clampi(v[1], 0, 64); k.mute = v[2] ? 1 : 0; k.sliceMode = v[3] ? 1 : 0; k.sliceAmount = (uint8_t)clampi(v[4], 0, 100);
-        k.mode = (uint8_t)clampi(v[5], 0, kGrainModes - 1); k.sync = v[6] ? 1 : 0; k.legato = v[7] ? 1 : 0; k.solo = v[8] ? 1 : 0;
+        k.mode = (uint8_t)clampi(v[5], 0, kGrainModes - 1); k.sync = v[6] ? 1 : 0; k.legato = v[7] ? 1 : 0; k.solo = v[8] ? 1 : 0; k.beats = (uint8_t)clampi(v[9], 0, 64);
         return kKitTouched;
     }
     if (!std::strcmp(op, "U") && std::sscanf(a, "%d %d", &v[0], &v[1]) == 2 && okT(v[0])) { b.kit[v[0]].mute = v[1] ? 1 : 0; return kKitTouched; }

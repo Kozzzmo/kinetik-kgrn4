@@ -399,6 +399,9 @@ protected:
     R legatoBtn() const { return {496.f, 122.f, 76.f, 22.f}; }
     R lockClearBtn() const { return {190.f, 122.f, 104.f, 22.f}; }
     R zoomBtn2() const { return {588.f, 122.f, 58.f, 22.f}; }
+    R loopBtn() const { return {190.f, 122.f, 104.f, 22.f}; }
+    R scaleBox() const { return {626.f, 722.f, 110.f, 64.f}; }
+    R rootBox() const { return {740.f, 722.f, 52.f, 64.f}; }
     R waveR() const { return {20.f, 148.f, 678.f, 118.f}; }
     R loadBtn() const { return {20.f, 272.f, 64.f, 26.f}; }
     R matBtn() const { return {88.f, 272.f, 150.f, 26.f}; }
@@ -796,6 +799,10 @@ protected:
         button(syncBtn(), "SYNC", kit.sync != 0, 9.f);
         button(legatoBtn(), "LEGATO", kit.legato != 0, 9.f);
         if (!liveTrack(t)) button(zoomBtn2(), "ZOOM", zoom, 9.f);
+        if (!liveTrack(t) && !lockMode()) {
+            if (kit.beats) std::snprintf(b, sizeof(b), "LOOP %d BEAT%s", kit.beats, kit.beats > 1 ? "S" : ""); else std::snprintf(b, sizeof(b), "LOOP SYNC");
+            button(loopBtn(), b, kit.beats != 0, 9.f);
+        }
         const SampleData* s = srcOf(t);
         const R wr = waveR();
         box(wr, th->lcdBg); frame(wr, th->panelEdge, -1.f, th->panelEdgeWidth);
@@ -805,7 +812,8 @@ protected:
                 std::snprintf(b, sizeof(b), bars == 1 ? "LAST %d BAR" : "LAST %d BARS", bars);
                 label(696, 133, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
             } else if (s) {
-                std::snprintf(b, sizeof(b), "%.2f S", s->pcm.size() / s->sr);
+                if (kit.beats) std::snprintf(b, sizeof(b), "%.0f BPM", kit.beats * 60.0 / (s->pcm.size() / s->sr));   // the loop's own tempo
+                else std::snprintf(b, sizeof(b), "%.2f S", s->pcm.size() / s->sr);
                 label(696, 133, b, 10.f, th->dim, ALIGN_RIGHT | ALIGN_MIDDLE);
             }
         }
@@ -900,8 +908,42 @@ protected:
             const int i = (k - tpL1WAVE) / kLfoParams;
             if (lfoSynced(knobValue(lfoParam(i, 2)))) return kLfoSyncNames[lfoSyncDiv(v)];
         }
+        if (k == tpSCAN && kit.beats && !liveTrack(selTrack)) {      // LOOP SYNC: SCAN = speed against the tempo
+            const float sp = scanSpeed(v); char b[24];
+            if (sp == 0.f) return "FREEZE";
+            std::snprintf(b, sizeof(b), "%sx%.2f", sp < 0.f ? "REV " : "", std::fabs(sp)); return b;
+        }
         return trackValueText(k, v, kit.nSlices, kit.mode, kit.sync != 0);
     }
+    // LOOP SYNC: how many beats a loop of `secs` holds: from a tempo in its name ("_174bpm", "120 BPM"), otherwise the
+    // power of two that puts it closest to 120 BPM
+    static int guessBeats(double secs, const std::string& name)
+    {
+        if (secs <= 0.05) return 4;
+        std::string n = name; for (auto& c : n) c = (char)std::tolower((unsigned char)c);
+        for (size_t i = 0; i < n.size(); ++i) {
+            if (!std::isdigit((unsigned char)n[i]) || (i > 0 && std::isdigit((unsigned char)n[i - 1]))) continue;
+            size_t j = i; while (j < n.size() && std::isdigit((unsigned char)n[j])) ++j;
+            const int v = std::atoi(n.substr(i, j - i).c_str());
+            size_t k = j; while (k < n.size() && (n[k] == ' ' || n[k] == '_' || n[k] == '-')) ++k;
+            if (v >= 50 && v <= 220 && n.compare(k, 3, "bpm") == 0) return clampi((int)std::lround(secs * v / 60.0), 1, 64);
+        }
+        int best = 4; double bd = 1e9;
+        for (int b = 1; b <= 64; b *= 2) { const double bpm = b * 60.0 / secs, d = std::fabs(std::log(bpm / 120.0)); if (d < bd) { bd = d; best = b; } }
+        return best;
+    }
+    static bool looksLikeLoop(const std::string& name)
+    {
+        std::string n = name; for (auto& c : n) c = (char)std::tolower((unsigned char)c);
+        return n.find("loop") != std::string::npos || n.find("bpm") != std::string::npos || n.find("break") != std::string::npos;
+    }
+    void setBeats(int t, int beats) { bank->kit[t].beats = (uint8_t)clampi(beats, 0, 64); sendKit(t); repaint(); }
+    void stepBeats(int t, int d)
+    {
+        int i = 0; for (int k = 0; k < kLoopBeatsN; ++k) if (kLoopBeats[k] <= bank->kit[t].beats) i = k;
+        setBeats(t, kLoopBeats[clampi(i + d, 0, kLoopBeatsN - 1)]);
+    }
+    void setScale(int sc, int root) { char b[24]; std::snprintf(b, sizeof(b), "G %d %d", clampi(sc, 0, kScales - 1), clampi(root, 0, 11)); sendCmd(b); repaint(); }
     // how far the track's LFOs move a knob right now (knob units), for the dot on its arc
     // LFO colours (as KDSP-16 / KMSP-6 defaults: green, yellow, white; white = ink on RISO)
     Color lfoInk(int l) const
@@ -1100,6 +1142,8 @@ protected:
         number(pb.x + pb.w - 30, pb.cy() + 1, presetNameStr.c_str(), 15.f, th->text, ALIGN_RIGHT | ALIGN_MIDDLE);
         beginPath(); moveTo(pb.x + pb.w - 18, pb.cy() - 6); lineTo(pb.x + pb.w - 10, pb.cy()); lineTo(pb.x + pb.w - 18, pb.cy() + 6); closePath(); fillColor(th->text); fill();
         button(saveBtn(), "SAVE AS PRESET", false, 9.5f);
+        lcdCell(scaleBox(), "SCALE", kScaleNames[bank->scale % kScales]);
+        lcdCell(rootBox(), "ROOT", kRootNames[bank->root % 12]);
     }
     void drawReset()
     {
@@ -1213,6 +1257,7 @@ protected:
             if (lit[n] >= 0) return Color(voiceColor(lit[n]), black ? blackKey : whiteKey, 0.15f);
             if (keyIsHeld(n)) return th->accent;
             if (n == stepNote) return th->lock;
+            if (bank->scale && !inScale(n, bank->root, bank->scale)) return Color(black ? blackKey : whiteKey, th->panel, 0.6f);   // out of the SCALE
             if (n == kBaseNote) return Color(black ? blackKey : whiteKey, th->accent, 0.25f);   // the sample's own pitch
             return black ? blackKey : whiteKey;
         };
@@ -1645,6 +1690,8 @@ protected:
     void setMaterial(int t, int m)
     {
         bank->kit[t].material = (uint8_t)clampi(m, 0, kMatLive);
+        if (m > 0) bank->kit[t].beats = kMaterialBeats[bank->kit[t].material];   // rhythmic materials follow the tempo
+        else { const SampleData* sd = srcOf(t); bank->kit[t].beats = sd && looksLikeLoop(sd->name) ? (uint8_t)guessBeats(sd->pcm.size() / sd->sr, sd->name) : 0; }
         sliceKit(bank->kit[t], srcOf(t));
         sendKit(t);
         repaint();
@@ -1678,6 +1725,8 @@ protected:
         setParamGesture(tpIndex(t, tpSLICE), 0.f);
         setParamGesture(tpIndex(t, tpPOSITION), 0.f);
         bank->kit[t].material = 0;
+        // a file named as a loop ("loop", "break", "... bpm") is synced to the tempo at once
+        bank->kit[t].beats = looksLikeLoop(d->name) ? (uint8_t)guessBeats(d->pcm.size() / d->sr, d->name) : 0;
         reslice(t);
         smpMsg.clear();
         presetNameStr = presetNameStr == "Init" ? presetNameStr : presetNameStr;
@@ -1784,6 +1833,9 @@ protected:
         if (matBtn().in(x, y)) return "Built-in materials to play without your own samples, or LIVE: the audio input, granulated as it comes. Click = next, right-click = previous (SAMPLE = your file).";
         if (captureBtn().in(x, y)) return "CAPTURE: the last bars of the input (see CAPTURE at the top) become this track's sample, sliced and saved with the project.";
         if (modeBtn().in(x, y)) return std::string(kModeHelp[bank->kit[selTrack].mode % kGrainModes]) + ". Click = next mode, right-click = previous.";
+        if (loopBtn().in(x, y) && !liveTrack(selTrack) && !lockMode()) return "LOOP SYNC: the sample is a loop of n beats and plays in time at the tempo (time stretched by the grains: the pitch stays). Click = on (beats guessed) / off, right-click or scroll = beats. SCAN = speed against the tempo.";
+        if (scaleBox().in(x, y)) return "SCALE: every grain's pitch (step notes, keys, PITCH, LFOs) moves to the nearest note of the scale. Click = next, right-click = previous.";
+        if (rootBox().in(x, y)) return "ROOT of the scale (C = the sample's own pitch). Click = up, right-click = down.";
         if (zoomBtn2().in(x, y)) return "ZOOM: the display shows START to END, so every grain is visible; off = the whole sample.";
         if (syncBtn().in(x, y)) return "SYNC: SIZE in note values (1/64 to 2 bars); in CLOUD, regular grains fall on the tempo grid.";
         if (legatoBtn().in(x, y)) return "LEGATO: a single-note step does not start the sound again, it changes the playing note (pitch, locks, length).";
@@ -2118,6 +2170,14 @@ protected:
         // display
         if (lockMode() && lockClearBtn().in(x, y)) { char b[40]; std::snprintf(b, sizeof(b), "kc %d %d %d", editPattern(), lockTrack, lockStep); sendCmd(b); repaint(); return true; }
         if (zoomBtn2().in(x, y) && !liveTrack(selTrack)) { zoom = !zoom; repaint(); return true; }
+        if (loopBtn().in(x, y) && !liveTrack(selTrack) && !lockMode()) {
+            const SampleData* sd = srcOf(selTrack);
+            if (right) stepBeats(selTrack, 1);
+            else setBeats(selTrack, bank->kit[selTrack].beats ? 0 : (sd ? guessBeats(sd->pcm.size() / sd->sr, sd->name) : 4));
+            return true;
+        }
+        if (scaleBox().in(x, y)) { setScale((bank->scale + (right ? kScales - 1 : 1)) % kScales, bank->root); return true; }
+        if (rootBox().in(x, y)) { setScale(bank->scale, (bank->root + (right ? 11 : 1)) % 12); return true; }
         if (waveR().in(x, y)) { waveDown(x); drag = dkWave; repaint(); return true; }
         if (loadBtn().in(x, y)) { openSampleBrowser(); return true; }
         if (matBtn().in(x, y)) { setMaterial(selTrack, (bank->kit[selTrack].material + (right ? kMatLive : 1)) % (kMatLive + 1)); return true; }
@@ -2296,6 +2356,9 @@ protected:
         const float x = ev.pos.getX() / sx, y = ev.pos.getY() / sx;
         const float d = ev.delta.getY() > 0 ? 1.f : (ev.delta.getY() < 0 ? -1.f : 0.f);
         if (d == 0.f || overlay != ovNone) return false;
+        if (loopBtn().in(x, y) && !liveTrack(selTrack) && !lockMode() && bank->kit[selTrack].beats) { stepBeats(selTrack, (int)d); return true; }
+        if (scaleBox().in(x, y)) { setScale(clampi(bank->scale + (int)d, 0, kScales - 1), bank->root); return true; }
+        if (rootBox().in(x, y)) { setScale(bank->scale, (bank->root + (int)d + 12) % 12); return true; }
         for (int i = 0; i < pageCount(); ++i) if (pageKnob(i).in(x, y)) {
             const int k = kPageStart[page] + i;
             if (knobIsHostParam()) { editParameter(tpIndex(selTrack, k), true); setKnob(k, knobValue(k) + d); editParameter(tpIndex(selTrack, k), false); }

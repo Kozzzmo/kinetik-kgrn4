@@ -22,7 +22,7 @@ inline std::string kitLines(const Bank& b, int t)
 {
     const Kit& k = b.kit[t];
     std::string s = "M " + std::to_string(t) + " " + std::to_string(k.material) + " " + std::to_string(k.mute) + " " + std::to_string(k.sliceMode) + " " + std::to_string(k.sliceAmount)
-                    + " " + std::to_string(k.mode) + " " + std::to_string(k.sync) + " " + std::to_string(k.legato) + " " + std::to_string(k.solo) + "\n";
+                    + " " + std::to_string(k.mode) + " " + std::to_string(k.sync) + " " + std::to_string(k.legato) + " " + std::to_string(k.solo) + " " + std::to_string(k.beats) + "\n";
     s += "X " + std::to_string(t) + " " + std::to_string(k.nSlices);
     for (int i = 0; i < k.nSlices; ++i) s += " " + std::to_string(k.slice[i]);
     return s;
@@ -36,6 +36,7 @@ inline void defaultKits(Bank& b)
     static const uint8_t defSync[kTracks] = {0, 0, 1, 0}, defLegato[kTracks] = {0, 0, 0, 0};
     for (int t = 0; t < kTracks; ++t) {
         Kit& k = b.kit[t]; k = Kit(); k.material = (uint8_t)defMat[t]; k.mode = (uint8_t)defMode[t]; k.sync = defSync[t]; k.legato = defLegato[t];
+        k.beats = kMaterialBeats[k.material];
         sliceKit(k, material(defMat[t]).get());
     }
 }
@@ -53,6 +54,7 @@ struct PB {
     void mat(int t, int m, int mode = 0, int amount = 50)
     {
         Kit& k = b.kit[t]; k.material = (uint8_t)m; k.sliceMode = (uint8_t)mode; k.sliceAmount = (uint8_t)amount;
+        k.beats = kMaterialBeats[m];
         sliceKit(k, material(m).get());
     }
     static float sliceKnobOf(PB& b, int t, int s) { return sliceKnob(s, b.slices(t)); }

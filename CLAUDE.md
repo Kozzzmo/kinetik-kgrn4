@@ -138,3 +138,13 @@ CHAOS, no text under the display, 128 steps, LFO display of the other plug-ins, 
   echo FREEZE, filter ON, CHAOS HOLD), patterns at y 386, bottom bar `drawBottom` (REC / CLICK, RESET -> `ovReset`
   `resetSound`, FILL, UNDO, PRESETS, SAVE), 8 step pages, `drawKnob(..., mod01, modCol)` + `lfoInk` + L1/L2/L3 badge.
   CLICK saved per user as the 3rd value of the view file.
+
+## 0.6.0 (owner: "synchroniser une boucle si je choisis d'en charger une", "un choix de scale qui force le pitch des grains")
+
+- `Kit::beats` (M line field 10, 0 = off): LOOP SYNC; engine `setupTrack`: `scanInc = scanSpeed(SCAN) * (n0 / beats) *
+  bpm / 60 / sr` (not for LIVE). UI `loopBtn` (left of MODE), `guessBeats` (tempo in the file name, else the power of two
+  closest to 120 BPM), `looksLikeLoop` ("loop", "break", "bpm" in the name: synced at load), `kMaterialBeats` (BELLS PLUCKS
+  BEAT KEYS = 8 beats, also in `PB::mat` / `defaultKits`), SCAN text "x1.00", the display shows the loop's tempo.
+- `Bank::scale` / `root` (line / command `G scale root`, copied with the kit by the plugin): `quantizeNote` in
+  `setupTrack` on note + PITCH (+ LFO); `kScaleNames` / `kScaleMask` / `kRootNames` in `Params.hpp`. UI `scaleBox` /
+  `rootBox` in the bottom bar, out-of-scale keys dimmed.

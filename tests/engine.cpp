@@ -553,6 +553,26 @@ int main()
         while (e->popRec(ev)) { ++n; if (ev.kind == 0) stepOk = ev.step == 2 && ev.note == kBaseNote + 7 && ev.track == 0; else gateOk = ev.step == 2 && ev.gate == 4; }
         check(n == 2 && stepOk && gateOk, "REC: the note lands on the nearest step with its length (1 step)");
     }
+    {   // 0.6: LOOP SYNC: a 2 s sample set to 4 beats plays through in 2 s at 120 BPM and in 4 s at 60 BPM
+        auto lp = sine(440.f, 2.f);
+        for (float bpm : {120.f, 60.f}) {
+            auto e = make(lp.get()); e->bank.kit[0].beats = 4; e->global[gTEMPO] = bpm;
+            e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+            render(*e, 2400); const float a = e->outPos[0];
+            render(*e, 48000); const float b = e->outPos[0];
+            const float want = bpm == 120.f ? 0.5f : 0.25f;
+            std::printf("     loop sync %.0f BPM: moved %.3f\n", bpm, b - a);
+            check(std::fabs((b - a) - want) < 0.01f, bpm == 120.f ? "LOOP SYNC 4 beats at 120 BPM: half the loop in 1 s" : "LOOP SYNC at 60 BPM: a quarter in 1 s");
+        }
+    }
+    {   // 0.6: SCALE: C# (+1) in C MAJOR plays C, D (+2) stays D; MINOR on A: E (+4) stays, F# (+6) -> F
+        check(quantizeNote(61, 0, 1) == 60 && quantizeNote(62, 0, 1) == 62 && quantizeNote(64, 9, 2) == 64 && quantizeNote(66, 9, 2) == 65 && quantizeNote(66, 0, 0) == 66,
+              "SCALE: notes moved to the nearest note of the scale");
+        auto e = make(s440.get()); e->bank.scale = 1;
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.note[0][0] = kBaseNote + 1;
+        Run r = render(*e, 24000);
+        check(std::fabs(zcHz(r.L, 4000, 24000) - 440.f) < 15.f, "SCALE MAJOR: a C# step plays C (the sample's pitch)");
+    }
     {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());
         for (int t = 0; t < kTracks; ++t) {

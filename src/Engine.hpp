@@ -748,6 +748,8 @@ private:
             }
             const double rl = std::max(64.0, v.rb - v.ra);
             v.scanInc = scanSpeed(P(tpSCAN)) * srcRatio;
+            if (kit.beats > 0 && !live)                    // LOOP SYNC: SCAN 100% = the whole sample in its beats at the tempo
+                v.scanInc = scanSpeed(P(tpSCAN)) * ((double)S.n[0] / kit.beats) * (curBpm / 60.0) / sr;
             double hf = P(tpPOSITION) / 127.0 + v.scan / rl;
             if (!live) hf -= std::floor(hf);
             v.head = v.ra + hf * rl;
@@ -757,7 +759,9 @@ private:
                 const double winLen = liveWindow();
                 v.headFrac = clampf((float)((v.head - (S.W - winLen)) / winLen), 0.f, 1.f);
             } else v.headFrac = v.head / (double)S.n[0];
-            const double semis = pitchSemis(P(tpPITCH)) + (v.note - kBaseNote) + fineCents(P(tpFINE)) / 100.0;
+            int st = pitchSemis(P(tpPITCH)) + (v.note - kBaseNote);
+            if (bank.scale) st = quantizeNote(kBaseNote + st, bank.root, bank.scale) - kBaseNote;   // SCALE: the nearest note of the scale
+            const double semis = st + fineCents(P(tpFINE)) / 100.0;
             v.grainInc = srcRatio * std::pow(2.0, semis / 12.0);
             v.origInc = srcRatio;
             v.pmix = P(tpPMIX) / 127.f;

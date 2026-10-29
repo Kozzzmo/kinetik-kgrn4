@@ -15,6 +15,8 @@ namespace kn {
 static constexpr int kMaterials = 8;   // ids 1..8 (0 = the track's own sample)
 static constexpr int kMatLive = kMaterials + 1;   // the audio input (LIVE), after the built-in ones
 static const char* const kMaterialNames[kMaterials + 2] = {"SAMPLE", "PAD", "BELLS", "CHOIR", "RAIN", "PLUCKS", "BEAT", "DRONE", "KEYS", "LIVE"};
+// LOOP SYNC of the built-in materials: the rhythmic ones are 2 bars at 120 BPM (8 beats), the others are free
+static const uint8_t kMaterialBeats[kMaterials + 2] = {0, 0, 8, 0, 0, 8, 8, 0, 8, 0};
 
 namespace mat {
 

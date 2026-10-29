@@ -213,6 +213,24 @@ inline const char* noteName(int n, char* buf, int len)
     return buf;
 }
 
+// ---- SCALE (global): every grain's pitch (note + PITCH + LFOs) is moved to the nearest note of the scale
+static constexpr int kScales = 9;
+static const char* const kScaleNames[kScales] = {"OFF", "MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "HARM MINOR", "MAJOR PENTA", "MINOR PENTA", "BLUES"};
+static const uint16_t kScaleMask[kScales] = {0xFFF, 0xAB5, 0x5AD, 0x6AD, 0x5AB, 0x9AD, 0x295, 0x4A9, 0x4E9};   // bit n = semitone n above the root
+static const char* const kRootNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+inline bool inScale(int note, int root, int scale) { return (kScaleMask[clampi(scale, 0, kScales - 1)] >> (((note - root) % 12 + 12) % 12)) & 1; }
+// the nearest note of the scale (a tie goes down); root 0 = C = the sample's own pitch class
+inline int quantizeNote(int note, int root, int scale)
+{
+    if (scale <= 0) return note;
+    for (int d = 0; d < 12; ++d) { if (inScale(note - d, root, scale)) return note - d; if (inScale(note + d, root, scale)) return note + d; }
+    return note;
+}
+
+// ---- LOOP SYNC (per track): the sample is a loop of n beats, played in time at the tempo (time stretched by the grains)
+static constexpr int kLoopBeatsN = 12;
+static const uint8_t kLoopBeats[kLoopBeatsN] = {1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64};
+
 // ---- LFO
 static constexpr int kLfoWaves = 6;
 static const char* const kLfoWaveNames[kLfoWaves] = {"TRI", "SINE", "SQUARE", "SAW UP", "SAW DN", "RANDOM"};

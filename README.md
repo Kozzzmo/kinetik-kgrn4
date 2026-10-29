@@ -14,6 +14,8 @@ played as grains by a step sequencer with per-step locks on every knob.
   RESO, FLT ENV, LOW CUT and the sends DELAY, REVERB, CHORUS, CHAOS), LFO 1 to 3 (WAVE, RATE, SYNC, DEPTH, DEST, TRIG); GRAIN MIX
   blends the sample played straight with the grains. SCAN at the centre
   freezes the sound, left plays it backwards; PITCH does not change the speed; PITCH MIX blends original and transposed grains.
+- LOOP SYNC: a loop (n beats) plays in time at the tempo, time stretched by the grains; SCALE forces every grain's
+  pitch into a scale.
 - Audio input (side-chain): LIVE tracks granulate the input as it comes (FREEZE), CAPTURE keeps the last 1-8 bars as a
   track's sample.
 - Sequencer: 4 tracks of up to 128 steps with their own length and speed, edited one at a time with lanes TRIG, NOTE,

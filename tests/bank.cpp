@@ -57,6 +57,11 @@ int main()
         const int d = lfoDest(o.patterns[0].locks[1][5][tpL2DEST]);
         check(o.patterns[0].locks[1][5][tpVOLUME] == 90 && d == tpDELAY + 1, "0.4 banks: locks and LFO destinations converted");
     }
+    {   // 0.6: LOOP SYNC beats and the SCALE are saved
+        Bank b6; b6.initDefault(); b6.kit[2].beats = 8; b6.scale = 2; b6.root = 9;
+        Bank c6; deserializeBank(c6, serializeBank(b6).c_str());
+        check(c6.kit[2].beats == 8 && c6.scale == 2 && c6.root == 9, "LOOP SYNC and SCALE saved");
+    }
     double ra, rb; Kit k; k.nSlices = 2; k.slice[0] = 0; k.slice[1] = 500000;
     sliceRegion(k, 1, 1000, ra, rb); check(ra == 500 && rb == 1000, "slice region");
     sliceRegion(k, -1, 1000, ra, rb); check(ra == 0 && rb == 1000, "whole sample region");
