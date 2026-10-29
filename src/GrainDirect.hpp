@@ -16,6 +16,11 @@ struct GrainDirect {
     // 0.4: the current output of LFO i of a track (-1 .. 1, times its depth)
     virtual float lfoValue(int track, int i) = 0;
     // 0.4.1: every grain and voice of a track now (for the grain display); returns the grain count, nv = voices
+    // 0.5: REC (live notes written into the pattern), metronome, CHAOS hold
+    virtual bool popRecorded(RecEvent& e) = 0;
+    virtual void setRecording(bool on) = 0;
+    virtual void setClick(bool on) = 0;
+    virtual void setChaosHold(bool on) = 0;
     virtual int grainView(int track, GrainView* out, int max, VoiceView* vout, int vmax, int& nv) = 0;
 };
 

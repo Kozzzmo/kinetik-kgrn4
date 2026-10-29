@@ -7,6 +7,8 @@
 #pragma once
 #include "Bank.hpp"
 #include "Fx.hpp"
+#include "MasterFx.hpp"
+#include "Click.hpp"
 #include "Sample.hpp"
 #include "Materials.hpp"
 #include <climits>
@@ -31,6 +33,7 @@ inline void knDenormalsOff()
 struct Transport { bool hostValid = false, hostPlaying = false; double beat = 0, bpm = 120; };
 // live notes (MIDI, UI keyboard): note = MIDI note (kBaseNote = the sample's own pitch)
 struct NoteIn { uint32_t frame; int track; int note; float vel; bool on; };
+
 
 // grain windows: five shapes the SHAPE knob morphs through (square, triangle, smooth, percussive, reversed percussive)
 struct GrainWindows {
@@ -69,18 +72,30 @@ public:
     float outPos[kTracks] = {-1.f, -1.f, -1.f, -1.f};   // play head of the newest voice, fraction of the material (-1 = silent)
     float inPeak = 0.f;                                  // input level (UI meter)
     int midiPattern = -1;
+    Click click;
+    bool recording = false;                      // REC: live notes are written into the pattern (popRec)
+    bool popRec(RecEvent& e)
+    {
+        const int r = recR.load(std::memory_order_relaxed);
+        if (r == recW.load(std::memory_order_acquire)) return false;
+        e = recQ[r]; recR.store((r + 1) % kRecQ, std::memory_order_release);
+        return true;
+    }
+    void setGlitchHold(bool on) { fx.glHold.store(on ? 1 : 0); }
 
     Engine()
     {
         for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) trackParam[t][k] = trackDefault(t, k);
         for (int g = 0; g < kGlobalParams; ++g) global[g] = globalDefault(g);
         bank.initDefault();
+        for (auto& a : recStepOf) for (auto& x : a) x = -1;
     }
 
     void init(double sampleRate)
     {
         sr = (float)sampleRate;
-        dly.init(sr); rev.init(sr); cho.init(sr);
+        fx.init(sr); click.init(sr);
+        for (auto* b : {&bML, &bMR, &bDL, &bDR, &bRL, &bRR, &bCL, &bCR, &bGL, &bGR}) b->assign(kBlock, 0.f);
         liveCap = (int64_t)(kLiveSeconds * sr);
         liveL.assign((size_t)liveCap, 0.f); liveR.assign((size_t)liveCap, 0.f);
         for (int m = 0; m < SampleData::kMips; ++m) {
@@ -92,9 +107,10 @@ public:
     }
     void reset()
     {
-        for (int t = 0; t < kTracks; ++t) { tr[t] = TrackState(); tr[t].rng.s = 0x9E3779B9u * (t + 1); tr[t].lfoRnd[0] = tr[t].lfoRnd[1] = 0.f; }
-        dly.clear(); rev.clear(); cho.clear();
-        mLoL.y = mLoR.y = 0.f; mHiL.reset(); mHiR.reset();
+        for (int t = 0; t < kTracks; ++t) { tr[t] = TrackState(); tr[t].rng.s = 0x9E3779B9u * (t + 1); }
+        fx.reset(); click.reset();
+        for (auto* f : {&mfHp[0], &mfHp[1], &mfLp[0], &mfLp[1]}) f->reset();
+        mfHpHz = 20.f; mfLpHz = 20000.f;
         wasPlaying = false; usingInternal = false; internalBeat = 0; prevPlayParam = false; lastK16 = INT64_MIN;
         grains = 0;
     }
@@ -166,9 +182,27 @@ public:
         return n;
     }
 
+    // a host block in pieces of at most kBlock frames (the master effects work on buffers)
     void process(float* outL, float* outR, uint32_t frames, const Transport& tp, const NoteIn* notes = nullptr, uint32_t nNotes = 0)
     {
         knDenormalsOff();
+        uint32_t done = 0, ni = 0;
+        const float* in0L = inL; const float* in0R = inR;
+        while (done < frames) {
+            const uint32_t n = std::min<uint32_t>(kBlock, frames - done);
+            Transport t = tp;
+            if (t.hostValid && t.hostPlaying && done > 0) t.beat += done * std::max(20.0, std::min(400.0, t.bpm > 1.0 ? t.bpm : (double)global[gTEMPO])) / (60.0 * sr);
+            uint32_t a = ni; while (ni < nNotes && notes[ni].frame < done + n) ++ni;
+            NoteIn sub[64]; uint32_t ns = 0;
+            for (uint32_t i = a; i < ni && ns < 64; ++i) { sub[ns] = notes[i]; sub[ns].frame = notes[i].frame >= done ? notes[i].frame - done : 0; ++ns; }
+            inL = in0L ? in0L + done : nullptr; inR = in0R ? in0R + done : nullptr;
+            processBlock(outL + done, outR + done, n, t, sub, ns);
+            done += n;
+        }
+        inL = in0L; inR = in0R;
+    }
+    void processBlock(float* outL, float* outR, uint32_t frames, const Transport& tp, const NoteIn* notes, uint32_t nNotes)
+    {
         if (frames == 0) return;
         const bool playParam = global[gPLAY] > 0.5f;
         double bpm = tp.hostValid && tp.bpm > 1.0 ? tp.bpm : (double)global[gTEMPO];
@@ -196,17 +230,7 @@ public:
             curPattern = c >= 0 ? c : want;
         }
         spb = 60.0 * sr / bpm;
-        // effects for this block
-        dly.set(global[gDLY_TIME], global[gDLY_FB], spb, global[gDLY_HICUT], global[gDLY_LOCUT], global[gDLY_WIDTH]);
-        rev.set(global[gREV_SIZE], global[gREV_TONE]); rev.setSpace(global[gREV_PRE], global[gREV_WIDTH]);
-        cho.set(global[gCHO_RATE], global[gCHO_DEPTH], global[gCHO_MIX]);
-        const float dlyRet = levelGain(global[gDLY_LEVEL]), revRet = levelGain(global[gREV_LEVEL]);
-        const float mDrive = global[gDRIVE] / 127.f;
-        mLoL.setLP(cutHz(global[gLOWCUT], 10.f, 1200.f), sr); mLoR.a = mLoL.a;
-        const bool loCutOn = global[gLOWCUT] > 0.5f, hiCutOn = global[gHIGHCUT] < 126.5f;
-        if (hiCutOn) { const float hz = cutHz(global[gHIGHCUT], 600.f, 20000.f); mHiL.setup(hz, 0.707f, sr); mHiR.setup(hz, 0.707f, sr); }
-        const float outTarget = trimGain(global[gOUTPUT]);
-        if (outG < 0.f) outG = outTarget;
+        if (!playing) { for (auto& T : tr) T.recSkipK = INT64_MIN; }
         const float sm = 1.f - std::exp(-1.f / (0.02f * sr));
         const bool freeze = global[gFREEZE] > 0.5f;
         bool anySolo = false; for (int t = 0; t < kTracks; ++t) anySolo = anySolo || bank.kit[t].solo;
@@ -226,6 +250,7 @@ public:
             while (ni < nNotes && notes[ni].frame < pos + n) {
                 const NoteIn& e = notes[ni++];
                 if (e.on) noteOn(e.track, e.note, e.vel); else noteOff(e.track, e.note);
+                if (recording && playing) recordNote(e, b0 + pos * bpf);
             }
             const double beat = b0 + pos * bpf;
             if (playing) {
@@ -257,6 +282,7 @@ public:
                     const int step = P.trackStep(t, k);
                     T.step = step;
                     T.ratLeft = 0;
+                    if (k == T.recSkipK) { T.recSkipK = INT64_MIN; continue; }   // just recorded: the held key plays it
                     const bool audible = !bank.kit[t].mute && (!anySolo || bank.kit[t].solo);
                     if (!P.on[t][step] || !audible) continue;
                     const int len = P.len[t] ? P.len[t] : 16;
@@ -278,7 +304,7 @@ public:
                 if (!freeze) liveWrite(inL ? inL[pos + i] : 0.f, inR ? inR[pos + i] : 0.f);
                 const double bt = playing ? beat + i * bpf : freeBeat + (pos + i) * bpf;
                 if (playing) { const int64_t bar = (int64_t)std::floor(bt / 4.0 + 1e-9); if (bar != lastBar) { lastBar = bar; barW = liveW; } }
-                float mixL = 0.f, mixR = 0.f, dSend = 0.f, dSendR = 0.f, rL = 0.f, rR = 0.f;
+                float mixL = 0.f, mixR = 0.f, dSend = 0.f, dSendR = 0.f, rL = 0.f, rR = 0.f, cL = 0.f, cR = 0.f, gL = 0.f, gR = 0.f;
                 for (int t = 0; t < kTracks; ++t) {
                     TrackState& T = tr[t];
                     if (!T.busy) continue;
@@ -289,20 +315,19 @@ public:
                     l *= T.vol; r *= T.vol;
                     mixL += l; mixR += r;
                     dSend += l * T.dSend; dSendR += r * T.dSend; rL += l * T.rSend; rR += r * T.rSend;
+                    cL += l * T.cSend; cR += r * T.cSend; gL += l * T.gSend; gR += r * T.gSend;
                 }
-                float el, er, vl, vr;
-                dly.process(dSend, dSendR, el, er);
-                rev.process(rL, rR, vl, vr);
-                float L = mixL + el * dlyRet + vl * revRet, R = mixR + er * dlyRet + vr * revRet;
-                cho.process(L, R);
-                if (mDrive > 0.001f) { const float g = 1.f + mDrive * 5.f, c = 1.f / std::sqrt(g); L = std::tanh(L * g) * c; R = std::tanh(R * g) * c; }
-                if (loCutOn) { L -= mLoL.lp(L); R -= mLoR.lp(R); }
-                if (hiCutOn) { mHiL.tick(L); mHiR.tick(R); L = mHiL.lp; R = mHiR.lp; }
-                outG += (outTarget - outG) * sm;
-                outL[pos + i] = safety(L * outG); outR[pos + i] = safety(R * outG);
+                const uint32_t j = pos + i;
+                bML[j] = mixL; bMR[j] = mixR; bDL[j] = dSend; bDR[j] = dSendR; bRL[j] = rL; bRR[j] = rR;
+                bCL[j] = cL; bCR[j] = cR; bGL[j] = gL; bGR[j] = gR;
             }
             pos += n;
         }
+        // the master effects of KDSP-16 (echo, reverb, chorus, CHAOS, EQ, compressor, drive, volume), the click, the filter
+        fx.process(global, (float)bpm, bML.data(), bMR.data(), bDL.data(), bDR.data(), bRL.data(), bRR.data(), bCL.data(), bCR.data(),
+                   bGL.data(), bGR.data(), playing ? b0 : freeBeat, playing, outL, outR, frames);
+        click.process(outL, outR, frames, b0, bpf, recording && playing);
+        masterFilter(outL, outR, frames);
         if (!playing) freeBeat += bpf * frames; else freeBeat = b1;
         // outputs
         uint32_t act = 0;
@@ -424,10 +449,14 @@ private:
         float shape = 0.5f, jitter = 0.f, reverse = 0.f, octave = 0.f, spread = 0.f, pmix = 1.f; bool random = false, sync = false; double syncBeats = 0.25;
         float atkInc = 1.f, decCoef = 0.f, sus = 1.f, relCoef = 0.f; float panL = 0.707f, panR = 0.707f; int copies = 1;
         float fBase = 64.f, fEnv = 0.f, fq = 0.7f;
+        Svf hl, hr; bool lowCutOn = false;                   // LOW CUT (a second filter, high pass)
+        // GRAIN MIX: the sample played straight (no grains) from POSITION to END, looping to START, at the note's pitch
+        double dryPos = 0.0, dryInc = 1.0; bool dryInit = false; float dryG = 0.f, grainG = 1.f; int8_t dryLvl = 0;
     };
     struct TrackState {
         Voice v[kSlots]; int64_t lastK = INT64_MIN, k0 = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
-        bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, drive = 0.f;
+        bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, cSend = 0.f, gSend = 1.f, drive = 0.f;
+        int64_t recSkipK = INT64_MIN;
         Src src;
         float mod[kModTargets] = {};                          // LFO offsets in knob units, this segment
         double lfoPh[kLfos] = {}; float lfoRnd[kLfos] = {}, lfoOut[kLfos] = {}; bool lfoReset[kLfos] = {};
@@ -470,14 +499,60 @@ private:
     float sr = 48000.f; double curBpm = 120.0, spb = 24000.0, freeBeat = 0.0;
     TrackState tr[kTracks];
     GrainWindows win;
-    PingPong dly; Reverb rev; Chorus cho;
-    OnePole mLoL, mLoR; Svf mHiL, mHiR;
+    MasterFx fx;
+    static constexpr uint32_t kBlock = 1024;
+    std::vector<float> bML, bMR, bDL, bDR, bRL, bRR, bCL, bCR, bGL, bGR;
+    // master HP / LP filter with resonance, after the master FX (FILTER tab), as KDSP-16
+    Svf mfHp[2], mfLp[2];
+    float mfHpHz = 20.f, mfLpHz = 20000.f;
+    void masterFilter(float* L, float* R, uint32_t n)
+    {
+        const bool on = global[gMF_ON] > 0.5f;
+        const bool hpOn = on && global[gMF_HP] > 0.5f, lpOn = on && global[gMF_LP] < 126.5f;
+        if (!hpOn && !lpOn) { mfHpHz = 20.f; mfLpHz = 20000.f; for (auto* f : {&mfHp[0], &mfHp[1], &mfLp[0], &mfLp[1]}) f->reset(); return; }
+        const float q = resoQ(global[gMF_RESO], 0.707f, 9.707f);
+        mfHpHz += (cutoffHz(global[gMF_HP]) - mfHpHz) * 0.35f;
+        mfLpHz += (cutoffHz(global[gMF_LP]) - mfLpHz) * 0.35f;
+        for (int c = 0; c < 2; ++c) { mfHp[c].setup(mfHpHz, q, sr); mfLp[c].setup(mfLpHz, q, sr); }
+        float* ch[2] = {L, R};
+        for (int c = 0; c < 2; ++c)
+            for (uint32_t i = 0; i < n; ++i) {
+                float x = ch[c][i];
+                if (hpOn) { mfHp[c].tick(x); x = mfHp[c].hp; }
+                if (lpOn) { mfLp[c].tick(x); x = mfLp[c].lp; }
+                ch[c][i] = safety(x);
+            }
+    }
+    // REC
+    static constexpr int kRecQ = 256;
+    RecEvent recQ[kRecQ]; std::atomic<int> recW{0}, recR{0};
+    double recStart[kTracks][128]; int16_t recStepOf[kTracks][128]; int8_t recPatOf[kTracks][128];
+    void pushRec(const RecEvent& e) { const int w = recW.load(std::memory_order_relaxed), nw = (w + 1) % kRecQ; if (nw == recR.load(std::memory_order_acquire)) return; recQ[w] = e; recW.store(nw, std::memory_order_release); }
+    void recordNote(const NoteIn& e, double beat)
+    {
+        if (e.track < 0 || e.track >= kTracks || e.note < 0 || e.note > 127) return;
+        TrackState& T = tr[e.track];
+        const Pattern& P = bank.patterns[curPattern];
+        const double sbt = 0.25 / kSpeedMult[P.speed[e.track] % kSpeeds];
+        if (e.on) {
+            const int64_t k = (int64_t)std::floor(beat / sbt + 0.5);           // the nearest step of the track's grid
+            const int step = P.trackStep(e.track, k);
+            if (k > T.lastK) T.recSkipK = k;                                    // not started yet: the live note stands in for it
+            recStart[e.track][e.note] = beat; recStepOf[e.track][e.note] = (int16_t)step; recPatOf[e.track][e.note] = (int8_t)curPattern;
+            pushRec({0, (int8_t)curPattern, (int8_t)e.track, (int16_t)step, (int16_t)e.note, 0});
+        } else if (recStepOf[e.track][e.note] >= 0) {
+            const double steps = (beat - recStart[e.track][e.note]) / sbt;
+            int gi = 0; double best = 1e9;
+            for (int i = 0; i < kGateHold; ++i) { const double d = std::fabs(std::log(std::max(0.05, steps) / kGateSteps[i])); if (d < best) { best = d; gi = i; } }
+            pushRec({1, recPatOf[e.track][e.note], (int8_t)e.track, recStepOf[e.track][e.note], (int16_t)e.note, (int16_t)gi});
+            recStepOf[e.track][e.note] = -1;
+        }
+    }
     int64_t lastK16 = INT64_MIN, lastBar = INT64_MIN;
     int curPattern = 0;
     ChainPlayer chainPl;
     bool wasPlaying = false, usingInternal = false, prevPlayParam = false, playingNow = false;
     double internalBeat = 0, prevB1 = 0;
-    float outG = -1.f;
     int grains = 0;                                         // grains alive (all tracks)
     int voiceCount = 1;
     bool liveMips = false;                                     // voices sounding (all tracks), this segment
@@ -572,7 +647,7 @@ private:
         v.gateLeft = gateFrames; v.holdGate = !live && gateFrames < 0.0;
         if (locks) std::memcpy(v.lock, locks, kTrackParams); else std::memset(v.lock, kNoLock, kTrackParams);
         v.scan = 0.0; v.timer = 0.f; v.first = true; v.gridK = INT64_MIN; v.normA = v.normP = 1.f; v.normWait = 0;
-        v.fl.reset(); v.fr.reset(); v.filterOn = false;
+        v.fl.reset(); v.fr.reset(); v.filterOn = false; v.hl.reset(); v.hr.reset(); v.lowCutOn = false; v.dryInit = false;
         v.liveStart = (double)liveW;
         for (int j = 0; j < 4; ++j) {                      // LOOP copies: fixed detune / pan for this note
             v.ltimer[j] = -1e9f;                           // set at the first sample (copies staggered)
@@ -721,6 +796,22 @@ private:
                 const float hz = clampf(filterHz(v.fBase) * std::exp2(v.fEnv * 5.f * v.env), 20.f, sr * 0.45f);
                 v.fl.setup(hz, v.fq, sr); v.fr.setup(hz, v.fq, sr);
             }
+            {   // LOW CUT
+                const float lc = P(tpLOWCUT);
+                const bool lon = lc > 0.5f;
+                if (lon && !v.lowCutOn) { v.hl.reset(); v.hr.reset(); }
+                v.lowCutOn = lon;
+                if (lon) { const float hz = cutHz(lc, 20.f, 2000.f); v.hl.setup(hz, 0.707f, sr); v.hr.setup(hz, 0.707f, sr); }
+            }
+            {   // GRAIN MIX (equal power): the straight sample against the grains
+                const float m = P(tpGMIX) / 127.f;
+                v.grainG = std::sin(m * kPi * 0.5f); v.dryG = m >= 0.999f ? 0.f : std::cos(m * kPi * 0.5f);
+                v.dryInc = v.grainInc;
+                int lvl = 0; while (lvl + 1 < S.levels && std::fabs(v.dryInc) / (double)(1 << lvl) > 1.12) ++lvl;
+                v.dryLvl = (int8_t)lvl;
+                if (!v.dryInit) { v.dryPos = v.head; v.dryInit = true; }
+                if (v.dryPos < v.ra || v.dryPos > v.rb) v.dryPos = v.ra + std::fmod(std::max(0.0, v.dryPos - v.ra), std::max(64.0, v.rb - v.ra));
+            }
         }
         if (!T.busy) return;
         // level, drive and sends follow the newest note
@@ -730,12 +821,15 @@ private:
         T.drive = kv(T, nv, knobs, tpDRIVE) / 127.f;
         const float d = kv(T, nv, knobs, tpDELAY) / 127.f, r = kv(T, nv, knobs, tpREVERB) / 127.f;
         T.dSend = d * d; T.rSend = r * r;
+        const float c = kv(T, nv, knobs, tpCHORUS) / 127.f; T.cSend = c * c;
+        T.gSend = kv(T, nv, knobs, tpCHAOS) / 127.f;
     }
 
     // a new grain from the play head; layer >= 0 = a LOOP copy
     void spawn(TrackState& T, Voice& v, int layer)
     {
         // with many voices sounding each one gets its share of the budget (the level follows the grains really playing)
+        if (v.grainG < 0.001f) return;                       // GRAIN MIX all the way to the sample: no grains
         const int cap = std::min(kMaxGrains, std::max(8, kGrainBudget / std::max(1, voiceCount)));
         if (v.ng >= cap || grains >= kGrainBudget + 24) return;
         const Src& S = T.src;
@@ -896,7 +990,27 @@ private:
         }
         const float a = v.env * v.vel * v.normInv;
         l *= a; r *= a;
+        if (v.grainG < 0.999f) {                              // GRAIN MIX: the straight sample in
+            l *= v.grainG; r *= v.grainG;
+            if (v.dryG > 0.f) {
+                const double rl = std::max(64.0, v.rb - v.ra), xf = std::min(0.01 * S.sr, rl * 0.25);
+                const int lv = v.dryLvl; const double sc = 1.0 / (double)(1 << lv);
+                auto rd = [&](double p, float& a, float& b) { const double q = (p + S.off[lv]) * sc; a = S.cubic(lv, S.l[lv], q); b = S.cubic(lv, S.r[lv], q); };
+                float al, ar; rd(v.dryPos, al, ar);
+                const double into = v.dryPos - (v.rb - xf);
+                if (into > 0.0) {                                // crossfade into the loop start (no click at the loop point)
+                    float bl, br; rd(v.dryPos - rl, bl, br);
+                    const float w = (float)(into / xf);
+                    al += (bl - al) * w; ar += (br - ar) * w;
+                }
+                const float g = v.dryG * v.env * v.vel * 0.707f;
+                l += al * g * v.panL; r += ar * g * v.panR;
+                v.dryPos += v.dryInc;
+                if (v.dryPos >= v.rb) v.dryPos -= rl;
+            }
+        }
         if (v.filterOn) { v.fl.tick(l); v.fr.tick(r); l = v.hp ? v.fl.hp : v.fl.lp; r = v.hp ? v.fr.hp : v.fr.lp; }
+        if (v.lowCutOn) { v.hl.tick(l); v.hr.tick(r); l = v.hl.hp; r = v.hr.hp; }
         outL += l; outR += r;
     }
 };

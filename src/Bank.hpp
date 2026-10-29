@@ -87,7 +87,7 @@ static constexpr int kKitTouched = 1000;   // applyCommand: a kit changed
 
 inline std::string serializeBank(const Bank& b)
 {
-    std::string s = "KGRN44\n";
+    std::string s = "KGRN45\n";
     char buf[200];
     for (int t = 0; t < kTracks; ++t) {
         const Kit& k = b.kit[t];
@@ -214,10 +214,29 @@ inline void convertOldLock(std::string& line, int version)
     if (to == tpDECAY && val != 255) { std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, tpRELEASE, val >= 127 ? 60 : val); line = b; return; }
     std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, to, val); line = b;
 }
+// 0.4 (40 knobs per track, 2 LFOs, "KGRN44") -> 0.5 (50 knobs, 3 LFOs); an LFO DEST value is moved to the same knob
+static const int kKnobs04[40] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE,
+                                 tpVOLUME, tpPAN, tpFILTER, tpRESO, tpFLTENV, tpDRIVE, tpDELAY, tpREVERB,
+                                 tpL1WAVE, tpL1RATE, tpL1SYNC, tpL1DEPTH, tpL1DEST, tpL1TRIG, tpL2WAVE, tpL2RATE, tpL2SYNC, tpL2DEPTH, tpL2DEST, tpL2TRIG};
+inline int convertDest04(int v)          // an LFO DEST knob value of 0.4 (29 bins: none + 28 knobs)
+{
+    const int d = clampi((int)(v * 29 / 128), 0, 28);
+    if (d == 0) return 0;
+    return clampi((int)std::lround(lfoDestKnob(kKnobs04[d - 1] + 1)), 0, 127);
+}
+inline int convertKnob04(int k, int v) { const int to = kKnobs04[k]; return (to == tpL1DEST || to == tpL2DEST) ? convertDest04(v) : v; }
+inline void convertLock04(std::string& line)
+{
+    int p, t, st, k, val;
+    if (line.rfind("k ", 0) != 0 || std::sscanf(line.c_str() + 2, "%d %d %d %d %d", &p, &t, &st, &k, &val) != 5) return;
+    if (k < 0 || k >= 40) { line.clear(); return; }
+    char b[80]; std::snprintf(b, sizeof(b), "k %d %d %d %d %d", p, t, st, kKnobs04[k], val == 255 ? 255 : convertKnob04(k, val)); line = b;
+}
 inline bool deserializeBank(Bank& b, const char* text)
 {
     if (!text || std::strncmp(text, "KGRN4", 5) != 0) return false;
-    const int version = std::strncmp(text, "KGRN41", 6) == 0 ? 1 : (std::strncmp(text, "KGRN42", 6) == 0 || std::strncmp(text, "KGRN43", 6) == 0 ? 2 : 3);
+    const int version = std::strncmp(text, "KGRN41", 6) == 0 ? 1 : (std::strncmp(text, "KGRN42", 6) == 0 || std::strncmp(text, "KGRN43", 6) == 0 ? 2
+                      : (std::strncmp(text, "KGRN44", 6) == 0 ? 3 : 4));
     b.initDefault();
     const char* s = text; std::string line;
     while (*s) {
@@ -225,6 +244,7 @@ inline bool deserializeBank(Bank& b, const char* text)
         const size_t n = e ? (size_t)(e - s) : std::strlen(s);
         line.assign(s, n);
         if (version < 3) convertOldLock(line, version);
+        else if (version == 3) convertLock04(line);
         if (!line.empty() && line.rfind("KGRN", 0) != 0) applyCommand(b, line.c_str());
         s += n; if (*s == '\n') ++s;
     }

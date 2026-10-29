@@ -116,3 +116,25 @@ CAPTURE of the last bars + LIVE material, free redesign of the knobs)
   pitch (`pitchY`, auto range `pitchRange` 7..25 st) + pan x 6 px, window profile from SHAPE (`grainProfile`), colour per
   voice slot (`voiceColor`, no pink, darker on light skins). Keyboard: `keyChord`, LATCH (`latched`), PC KEYS (`pcDown`,
   row "awsedftgyhujkolp;", Z / X octave), voice keys lit. Test: grain view counts / chord pitches.
+
+## 0.5.0 (owner: REC bottom left, presets bottom right, mix original / grains, RESET keeping the sample, KDSP-16 effects +
+CHAOS, no text under the display, 128 steps, LFO display of the other plug-ins, LOW CUT, a third LFO)
+
+- `Params.hpp`: 50 knobs per track (AMP = ATTACK DECAY SUSTAIN RELEASE GRAIN MIX DRIVE VOLUME PAN, FX = FILTER RESO FLT ENV
+  LOW CUT DELAY REVERB CHORUS CHAOS, LFO 1-3), `kModTargets` 32, `kPages` 7, `kSteps` 128. Globals = the KDSP-16 master
+  block in its order (`gECHO_TIME .. gGL_MIX`, `kMasterNames` / `kMasterDefaults`, VOLUME default 116 = unity), then
+  `gMF_ON gECHO_RTIME gECHO_DRIVE gECHO_DUCK gECHO_FREEZE`, TEMPO PLAY PATTERN FREEZE CAPLEN, outputs. `RecEvent` here.
+- `MasterFx.hpp` and `Click.hpp` copied from KDSP-16 (identical, in `scripts/shared.sha256`); `Fx.hpp` is now only used by
+  `Materials.hpp`. Engine: `process` cuts host blocks into `kBlock` = 1024 and `processBlock` fills main / send buffers
+  (delay, reverb, chorus, chaos) for `fx.process`, then `click`, then `masterFilter` (as KDSP-16).
+- Voice: LOW CUT (`hl/hr`), GRAIN MIX (`grainG` / `dryG` equal power; dry = cubic read from POSITION to END at `grainInc`,
+  looping with a 10 ms crossfade, own mip level); no grains spawned at GRAIN MIX 0.
+- REC: `Engine::recording`, `recordNote` (nearest step of the track's grid, `recSkipK`, gate from the held time),
+  `popRec`; plugin cmds `rec / click / gh` + `GrainDirect::popRecorded / setRecording / setClick / setChaosHold`. UI
+  `setRec`, `pollRecorded` (chord detection per step of the take `recTake`), knob moves while REC + playing = locks.
+- Bank `KGRN45`; `convertLock04` / `convertKnob04` / `kKnobs04` (0.4 knobs, LFO DEST values re-aimed). User presets
+  `KGRN4-PRESET 4` (1-3 converted, old globals mapped where they have an equivalent).
+- UI 1180 x 800 (`DISTRHO_UI_DEFAULT_HEIGHT` 800): FX tabs as KDSP (`fxParam`, `masterName`, `masterText`, pads `padSlot`:
+  echo FREEZE, filter ON, CHAOS HOLD), patterns at y 386, bottom bar `drawBottom` (REC / CLICK, RESET -> `ovReset`
+  `resetSound`, FILL, UNDO, PRESETS, SAVE), 8 step pages, `drawKnob(..., mod01, modCol)` + `lfoInk` + L1/L2/L3 badge.
+  CLICK saved per user as the 3rd value of the view file.

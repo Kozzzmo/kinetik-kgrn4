@@ -24,6 +24,10 @@ public:
     SamplePtr captureInput(int bars) override { return engine->capture(bars); }
     void liveWave(float* mn, float* mx, int cols) override { engine->liveWave(mn, mx, cols); }
     int voiceHeads(int t, float* out, int max) override { return engine->voiceHeads(t, out, max); }
+    bool popRecorded(RecEvent& e) override { return engine->popRec(e); }
+    void setRecording(bool on) override { engine->recording = on; }
+    void setClick(bool on) override { engine->click.enabled = on; }
+    void setChaosHold(bool on) override { engine->setGlitchHold(on); }
     int grainView(int t, GrainView* out, int max, VoiceView* vout, int vmax, int& nv) override { return engine->grainView(t, out, max, vout, vmax, nv); }
     float lfoValue(int t, int i) override { return t >= 0 && t < kTracks && i >= 0 && i < kLfos ? engine->lfoValue(t, i) : 0.f; }
 
@@ -80,24 +84,11 @@ protected:
         const int g = (int)index - kGlobalBase;
         p.ranges.min = 0; p.ranges.max = 127; p.ranges.def = globalDefault(g);
         switch (g) {
-        case gREV_SIZE: p.name = "Reverb Size"; p.symbol = "rev_size"; return;
-        case gREV_TONE: p.name = "Reverb Tone"; p.symbol = "rev_tone"; return;
-        case gREV_PRE: p.name = "Reverb Pre-delay"; p.symbol = "rev_pre"; return;
-        case gREV_WIDTH: p.name = "Reverb Width"; p.symbol = "rev_width"; return;
-        case gREV_LEVEL: p.name = "Reverb Level"; p.symbol = "rev_level"; return;
-        case gDLY_TIME: p.name = "Echo Time"; p.symbol = "dly_time"; return;
-        case gDLY_FB: p.name = "Echo Feedback"; p.symbol = "dly_fb"; return;
-        case gDLY_HICUT: p.name = "Echo High Cut"; p.symbol = "dly_hicut"; return;
-        case gDLY_LOCUT: p.name = "Echo Low Cut"; p.symbol = "dly_locut"; return;
-        case gDLY_WIDTH: p.name = "Echo Width"; p.symbol = "dly_width"; return;
-        case gDLY_LEVEL: p.name = "Echo Level"; p.symbol = "dly_level"; return;
-        case gCHO_RATE: p.name = "Chorus Rate"; p.symbol = "cho_rate"; return;
-        case gCHO_DEPTH: p.name = "Chorus Depth"; p.symbol = "cho_depth"; return;
-        case gCHO_MIX: p.name = "Chorus Mix"; p.symbol = "cho_mix"; return;
-        case gOUTPUT: p.name = "Output"; p.symbol = "output"; return;
-        case gDRIVE: p.name = "Master Drive"; p.symbol = "drive"; return;
-        case gLOWCUT: p.name = "Master Low Cut"; p.symbol = "lowcut"; return;
-        case gHIGHCUT: p.name = "Master High Cut"; p.symbol = "highcut"; return;
+        case gMF_ON: p.name = "Filter On"; p.symbol = "mf_on"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
+        case gECHO_RTIME: p.name = "Echo R Time"; p.symbol = "echo_rtime"; return;
+        case gECHO_DRIVE: p.name = "Echo Drive"; p.symbol = "echo_drive"; return;
+        case gECHO_DUCK: p.name = "Echo Duck"; p.symbol = "echo_duck"; return;
+        case gECHO_FREEZE: p.name = "Echo Freeze"; p.symbol = "echo_freeze"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
         case gTEMPO: p.name = "Internal Tempo"; p.symbol = "tempo"; p.ranges.min = 40; p.ranges.max = 240; p.unit = "BPM"; return;
         case gPLAY: p.name = "Internal Play"; p.symbol = "play"; p.ranges.max = 1; p.hints |= kParameterIsBoolean | kParameterIsInteger; return;
         case gPATTERN: p.name = "Pattern"; p.symbol = "pattern"; p.ranges.max = kPatterns - 1; p.hints |= kParameterIsInteger; return;
@@ -107,7 +98,16 @@ protected:
         case gOUT_STEP: p.name = "Play Step"; p.symbol = "out_step"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.min = -1; p.ranges.max = 32768 * Engine::kFine; return;
         case gOUT_ACTIVE: p.name = "Active Tracks"; p.symbol = "out_active"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.max = 15; return;
         case gOUT_PATTERN: p.name = "Playing Pattern"; p.symbol = "out_pattern"; p.hints = kParameterIsOutput | kParameterIsInteger; p.ranges.max = kPatterns - 1; return;
-        default: {
+        default: if (g < kMasterCount) {                          // the master effects, named as in KDSP-16
+            static char mn[kMasterCount][40], ms[kMasterCount][24];
+            const char* sec = g <= gECHO_LEV || g == gECHO_MODEL || g == gECHO_MOD ? "Echo" : g <= gREV_LEV || g == gREV_MODEL || g == gREV_MOD ? "Reverb"
+                            : g <= gVOLUME ? "Master" : g <= gMF_RESO ? "Filter" : g <= gCHO_LEV ? "Chorus" : "Chaos";
+            std::string nmS = std::string(sec) + " " + kMasterNames[g];
+            for (size_t i = std::strlen(sec) + 2; i < nmS.size(); ++i) nmS[i] = (char)std::tolower((unsigned char)nmS[i]);
+            std::snprintf(mn[g], sizeof(mn[g]), "%s", nmS.c_str()); std::snprintf(ms[g], sizeof(ms[g]), "m%d", g);
+            p.name = mn[g]; p.symbol = ms[g];
+            return;
+        } else {
             static char nm[4][32], sy[4][24];
             const int t = g - gOUT_POS1;
             std::snprintf(nm[t], sizeof(nm[t]), "T%d Play Head", t + 1); std::snprintf(sy[t], sizeof(sy[t]), "out_pos%d", t + 1);
@@ -209,6 +209,9 @@ protected:
                 line.assign(s, len);
                 if (line.rfind("pv ", 0) == 0) { unsigned i = 0; float v = 0.f; if (std::sscanf(line.c_str() + 3, "%u %f", &i, &v) == 2) uiEdit(i, v); }
                 else if (line == "panic") panic.store(true);
+                else if (line.rfind("rec ", 0) == 0) engine->recording = line[4] == '1';
+                else if (line.rfind("click ", 0) == 0) engine->click.enabled = line[6] == '1';
+                else if (line.rfind("gh ", 0) == 0) engine->setGlitchHold(line[3] == '1');
                 else if (line.rfind("sel ", 0) == 0) uiTrack.store(clampi(std::atoi(line.c_str() + 4), 0, kTracks - 1));
                 else if (line == "lic") licensed.store(lic::findInstalled(kProductCode).valid);
                 else if (line.rfind("trig ", 0) == 0 || line.rfind("rel ", 0) == 0) {   // on-screen keyboard: trig <track> <note> / rel <track> <note>

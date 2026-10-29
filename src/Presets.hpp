@@ -114,7 +114,7 @@ static void pDissolvingStrings(PB& b)
     b.lock(1, 16, tpPOSITION, 100);                               // the choir moves to its second chord
     b.mute(2); b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 110}, {gREV_TONE, 80}, {gTEMPO, 76}});
+    b.glob({{gREV_SIZE, 110}, {gREV_DAMP, 47}, {gTEMPO, 76}});
     b.lfo(0, 0, 1, 18, false, 18, tpPOSITION);                   // the pad drifts slowly through its chords
     b.lfo(1, 0, 0, 1, true, -20, tpFILTER);
 }
@@ -132,7 +132,7 @@ static void pChoirFog(PB& b)
     b.row(1, "x...............................................................");
     b.mute(2); b.mute(3);
     b.length(64);
-    b.glob({{gREV_SIZE, 118}, {gREV_TONE, 66}, {gTEMPO, 70}});
+    b.glob({{gREV_SIZE, 118}, {gREV_DAMP, 61}, {gTEMPO, 70}});
     b.lfo(0, 0, 0, 1, true, -22, tpFILTER); b.lfo(0, 1, 1, 30, false, 25, tpSPRAY);
 }
 
@@ -165,7 +165,7 @@ static void pShimmerFreeze(PB& b)
     b.row(1, "................x...............");
     b.mute(2); b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 122}, {gREV_TONE, 92}, {gTEMPO, 76}});
+    b.glob({{gREV_SIZE, 122}, {gREV_DAMP, 35}, {gTEMPO, 76}});
 }
 
 // ---- grain rain: you hear the grains themselves, scattered and sparkling
@@ -182,7 +182,7 @@ static void pBellRain(PB& b)
     b.row(1, "x...............................");
     b.mute(2); b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 100}, {gDLY_TIME, 104}, {gDLY_FB, 70}, {gTEMPO, 92}});
+    b.glob({{gREV_SIZE, 100}, {gECHO_TIME, 86}, {gECHO_FB, 62}, {gTEMPO, 92}});
     b.lfo(0, 0, 5, 9, true, 40, tpPAN); b.lfo(0, 1, 1, 3, true, 30, tpSIZE);
 }
 
@@ -202,7 +202,7 @@ static void pRainWindow(PB& b)
     b.row(2, "x...............................");
     b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 104}, {gDLY_TIME, 104}, {gTEMPO, 84}});
+    b.glob({{gREV_SIZE, 104}, {gECHO_TIME, 86}, {gTEMPO, 84}});
 }
 
 static void pMusicBoxDust(PB& b)
@@ -218,7 +218,7 @@ static void pMusicBoxDust(PB& b)
     for (int s = 0; s < 4; ++s) b.lock(1, s * 8, tpPOSITION, (float)(8 + s * 32));
     b.mute(2); b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 100}, {gDLY_TIME, 104}, {gDLY_FB, 64}, {gTEMPO, 88}});
+    b.glob({{gREV_SIZE, 100}, {gECHO_TIME, 86}, {gECHO_FB, 56}, {gTEMPO, 88}});
 }
 
 static void pParticleKeys(PB& b)
@@ -234,7 +234,7 @@ static void pParticleKeys(PB& b)
     b.pitchLock(1, 8, 5); b.pitchLock(1, 16, -4); b.pitchLock(1, 24, -5);
     b.mute(2); b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 96}, {gDLY_TIME, 104}, {gTEMPO, 96}});
+    b.glob({{gREV_SIZE, 96}, {gECHO_TIME, 86}, {gTEMPO, 96}});
     b.lfo(0, 0, 1, 3, true, 30, tpSPRAY); b.lfo(0, 1, 5, 11, true, 25, tpPMIX);
 }
 
@@ -255,7 +255,7 @@ static void pBeatShuffle(PB& b)
     b.row(1, "x.....x.....x...");
     b.lock(1, 6, tpPOSITION, 64); b.lock(1, 12, tpREVERSE, 127);
     b.mute(2); b.mute(3);
-    b.glob({{gTEMPO, 120}, {gDLY_TIME, 88}});
+    b.glob({{gTEMPO, 120}, {gECHO_TIME, 64}});
 }
 
 static void pStutterSlices(PB& b)
@@ -273,7 +273,7 @@ static void pStutterSlices(PB& b)
     b.row(1, "..x...x...x..x.x");
     b.lock(1, 6, tpPOSITION, 32); b.lock(1, 10, tpPOSITION, 64); b.lock(1, 13, tpPOSITION, 96); b.lock(1, 15, tpREVERSE, 127);
     b.mute(2); b.mute(3);
-    b.glob({{gTEMPO, 128}, {gDLY_TIME, 72}});
+    b.glob({{gTEMPO, 128}, {gECHO_TIME, 54}});
 }
 
 static void pGridCloud(PB& b)
@@ -290,7 +290,7 @@ static void pGridCloud(PB& b)
     b.tp(2, {{tpSCAN, 96}, {tpSIZE, PB::syncSize(4)}, {tpSHAPE, 6}, {tpSPREAD, 20}, {tpVOLUME, 70}, {tpREVERB, 12}});
     b.row(2, "x...x...x...x..x");
     b.mute(3);
-    b.glob({{gTEMPO, 120}, {gDLY_TIME, 104}});
+    b.glob({{gTEMPO, 120}, {gECHO_TIME, 86}});
 }
 
 static void pBrokenArp(PB& b)
@@ -313,7 +313,7 @@ static void pBrokenArp(PB& b)
     b.pitchLock(2, 16, -4);
     b.length(32);
     b.mute(3);
-    b.glob({{gTEMPO, 116}, {gDLY_TIME, 88}, {gDLY_FB, 50}});
+    b.glob({{gTEMPO, 116}, {gECHO_TIME, 64}, {gECHO_FB, 44}});
 }
 
 // ---- grain synth: chords and lines played from the material, as an instrument
@@ -334,7 +334,7 @@ static void pGrainKeys(PB& b)
     b.row(2, "x...............................................................");
     b.mute(3);
     b.length(64);
-    b.glob({{gREV_SIZE, 100}, {gDLY_TIME, 104}, {gTEMPO, 90}});
+    b.glob({{gREV_SIZE, 100}, {gECHO_TIME, 86}, {gTEMPO, 90}});
 }
 
 static void pChoirChords(PB& b)
@@ -373,7 +373,7 @@ static void pPluckLines(PB& b)
     b.row(2, "x...x...x...x...");
     b.mute(3);
     b.length(32);
-    b.glob({{gREV_SIZE, 98}, {gDLY_TIME, 104}, {gDLY_FB, 56}, {gTEMPO, 100}});
+    b.glob({{gREV_SIZE, 98}, {gECHO_TIME, 86}, {gECHO_FB, 49}, {gTEMPO, 100}});
 }
 
 static void pAmbientFour(PB& b)
@@ -391,7 +391,7 @@ static void pAmbientFour(PB& b)
     b.tp(1, {{tpOCTAVE, 30}, {tpREVERSE, 30}});
     b.tp(3, {{tpPITCH, 64 - 32}});
     b.length(32);
-    b.glob({{gREV_SIZE, 116}, {gDLY_TIME, 104}, {gTEMPO, 80}});
+    b.glob({{gREV_SIZE, 116}, {gECHO_TIME, 86}, {gTEMPO, 80}});
 }
 
 // ---- polyphony: chords played by the sequencer on one frozen harp note
@@ -404,13 +404,14 @@ static void pGrainChords(PB& b)
     b.row(0, "x...............x...............x...............x...............");
     b.chord(0, 0, 5, 0); b.chord(0, 16, 4, -4); b.chord(0, 32, 5, 5); b.chord(0, 48, 5, -5);   // Cm7 Abmaj7 Fm7 Gm7
     b.lfo(0, 0, 1, 2, true, 12, tpPOSITION); b.lfo(0, 1, 0, 30, false, 20, tpPMIX);
+    b.tp(0, {{tpCHORUS, 70}}); b.glob({{gCHO_LEV, 80}});
     b.mat(1, 2); b.mode(1, gmCloud);
     b.tp(1, {{tpSCAN, 70}, {tpSIZE, 36}, {tpDENSITY, 110}, {tpSPRAY, 100}, {tpSHAPE, 90}, {tpOCTAVE, 30}, {tpPMIX, 80}, {tpSPREAD, 127},
              {tpVOLUME, 58}, {tpDELAY, 60}, {tpREVERB, 70}});
     b.row(1, "x...............................................................");
     b.mute(2); b.mute(3);
     b.length(64);
-    b.glob({{gREV_SIZE, 106}, {gDLY_TIME, 104}, {gCHO_MIX, 50}, {gTEMPO, 84}});
+    b.glob({{gREV_SIZE, 106}, {gECHO_TIME, 86}, {gTEMPO, 84}});
 }
 
 static void pLiveGranulator(PB& b)

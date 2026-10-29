@@ -35,7 +35,7 @@ int main()
     applyCommand(a, "cp 2 5"); check(a.patterns[5].len[1] == 40, "cp");
     applyCommand(a, "clt 5 1"); check(a.patterns[5].trackEmpty(1), "clt");
     applyCommand(a, "cl 2"); check(a.patterns[2].isDefault(), "cl");
-    check(applyCommand(a, "k 0 4 0 0 1") == -1 && applyCommand(a, "s 0 0 64 1") == -1 && applyCommand(a, "zz") == -1, "bad commands refused");
+    check(applyCommand(a, "k 0 4 0 0 1") == -1 && applyCommand(a, "s 0 0 128 1") == -1 && applyCommand(a, "zz") == -1, "bad commands refused");
     check(!deserializeBank(b, "KFX81\n"), "other formats refused");
     applyCommand(a, "C 1 2 4:3 1:1");
     check(deserializeBank(b, serializeBank(a).c_str()) && b.chain.on && b.chain.n == 2 && b.chain.pat[0] == 4 && b.chain.rep[0] == 3, "chain survives");
@@ -51,6 +51,11 @@ int main()
         Bank o; deserializeBank(o, "KGRN43\nS 0 0 1000\nk 0 0 0 4 96\nk 0 0 0 15 30\n");   // 0.3: PITCH +12, DECAY
         check(o.patterns[0].note[0][0] == kBaseNote + 12 && o.patterns[0].locks[0][0][tpPITCH] == kNoLock, "0.3 banks: a PITCH lock becomes the step's note");
         check(o.patterns[0].locks[0][0][tpRELEASE] == 30 && o.patterns[0].gate[0][0] == kGateHold, "0.3 banks: DECAY becomes RELEASE, notes last until the next");
+    }
+    {   // 0.4 banks (40 knobs, 2 LFOs): VOLUME (20) and an LFO 2 DEST (38) pointing at DELAY (26) move to their 0.5 places
+        Bank o; deserializeBank(o, "KGRN44\nk 0 1 5 20 90\nk 0 1 5 38 121\n");
+        const int d = lfoDest(o.patterns[0].locks[1][5][tpL2DEST]);
+        check(o.patterns[0].locks[1][5][tpVOLUME] == 90 && d == tpDELAY + 1, "0.4 banks: locks and LFO destinations converted");
     }
     double ra, rb; Kit k; k.nSlices = 2; k.slice[0] = 0; k.slice[1] = 500000;
     sliceRegion(k, 1, 1000, ra, rb); check(ra == 500 && rb == 1000, "slice region");

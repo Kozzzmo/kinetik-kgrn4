@@ -43,6 +43,7 @@ static std::unique_ptr<Engine> make(const SampleData* src)
     std::unique_ptr<Engine> e(new Engine()); e->init(sr);
     for (int t = 0; t < kTracks; ++t) for (int k = 0; k < kTrackParams; ++k) e->trackParam[t][k] = trackParamDefault(k);   // neutral knobs
     e->global[gPLAY] = 1.f; e->global[gTEMPO] = 120.f;
+    e->global[gVOLUME] = 115.9f;                   // master VOLUME at unity gain (the measurements compare levels)
     e->trackParam[0][tpSPREAD] = 0.f;              // no random detune / pan for the measurements
     e->source[0] = src;
     for (auto& P : e->bank.patterns) std::memset(P.gate, kGateHold, sizeof(P.gate));   // notes last until the next one
@@ -168,7 +169,7 @@ int main()
         bool ok = true;
         for (int round = 0; round < 6; ++round) {
             for (int t = 0; t < kTracks; ++t) { e->bank.patterns[0].on[t][0] = e->bank.patterns[0].on[t][2] = 1; for (int k = 0; k < kTrackParams; ++k) e->trackParam[t][k] = (float)(((round + t + k) * 37) % 2 ? 127 : 0); }
-            e->global[gREV_SIZE] = 127; e->global[gDLY_FB] = 127; e->global[gOUTPUT] = 127;
+            e->global[gREV_SIZE] = 127; e->global[gECHO_FB] = 127; e->global[gVOLUME] = 127;
             Run r = render(*e, 24000);
             for (float v : r.L) if (!std::isfinite(v) || std::fabs(v) > 1.6f) ok = false;
         }
@@ -476,11 +477,18 @@ int main()
         auto e = make(material(2).get());
         e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 16; e->bank.patterns[0].gate[0][0] = 1;
         e->trackParam[0][tpDELAY] = 127.f; e->trackParam[0][tpREVERB] = 127.f;
-        for (int g : {gREV_SIZE, gREV_PRE, gREV_WIDTH, gREV_LEVEL, gDLY_FB, gDLY_WIDTH, gDLY_LEVEL, gCHO_RATE, gCHO_DEPTH, gCHO_MIX, gDRIVE, gLOWCUT}) e->global[g] = 127.f;
-        e->global[gHIGHCUT] = 0.f;
-        Run r = render(*e, 96000);
-        bool ok = true; for (float v : r.L) ok = ok && std::isfinite(v) && std::fabs(v) <= 1.5f;
-        check(ok && rms(r.L, 0, 96000) > 1e-3f, "all effects at their extremes: finite, bounded, audible");
+        bool ok = true; float lo = 1e9f;
+        for (int m = 0; m < 8; ++m) {                       // every echo model and reverb model, everything turned up, CHAOS on
+            for (int g = 0; g < gTEMPO; ++g) e->global[g] = 127.f;
+            e->global[gECHO_MODEL] = (float)(m * 16); e->global[gREV_MODEL] = (float)(m % 5 * 26); e->global[gECHO_FREEZE] = 0.f;
+            e->global[gMF_LP] = 60.f; e->global[gMF_HP] = 20.f; e->global[gCMP_THR] = 60.f; e->trackParam[0][tpCHORUS] = 127.f;
+            Run r = render(*e, 48000);
+            for (float v : r.L) ok = ok && std::isfinite(v) && std::fabs(v) <= 1.5f;
+            lo = std::min(lo, rms(r.L, 0, 48000));
+        }
+        Run r = render(*e, 4800);
+        std::printf("     extremes: ok %d, quietest %.4f\n", (int)ok, lo);
+        check(ok && lo > 1e-3f, "every echo / reverb model at the extremes, CHAOS, chorus, filter: finite, bounded, audible");
     }
     {   // 0.4.1: the grain display sees every grain, where it reads and at which pitch (a MIN7 chord = 4 voices, 0 3 7 10)
         auto e = make(material(1).get());
@@ -494,6 +502,56 @@ int main()
                                       const int st = (int)std::lround(g[i].semis); if (st >= 0 && st <= 10) pitches[st] = true; }
         check(n == e->activeGrains(0) && n >= 8 && nv == 4 && inside, "grain view: every grain, inside the material, 4 voices");
         check(pitches[0] && pitches[3] && pitches[7] && pitches[10], "grain view: the chord's pitches (0 3 7 10)");
+    }
+    {   // 0.5: GRAIN MIX 0 = the sample played straight: a 440 Hz sine stays a clean 440 Hz at the note's pitch, no grains
+        auto e = make(s440.get());
+        Pattern& P = e->bank.patterns[0]; P.on[0][0] = 1; P.len[0] = 64; P.note[0][0] = kBaseNote + 12;
+        e->trackParam[0][tpGMIX] = 0.f; e->trackParam[0][tpSCAN] = 64.f;
+        Run r = render(*e, 48000);
+        float lo = 1e9f, hi = 0.f; for (int a = 4800; a + 2400 <= 48000; a += 2400) { const float v = rms(r.L, a, a + 2400); lo = std::min(lo, v); hi = std::max(hi, v); }
+        check(e->activeGrains(0) == 0 && std::fabs(zcHz(r.L, 4800, 48000) - 880.f) < 20.f && hi < lo * 1.12f && lo > 0.05f, "GRAIN MIX 0: the sample straight at the note's pitch, steady, no grains");
+        auto f = make(s440.get());
+        f->bank.patterns[0].on[0][0] = 1; f->bank.patterns[0].len[0] = 64; f->trackParam[0][tpGMIX] = 64.f;
+        Run q = render(*f, 24000);
+        check(f->activeGrains(0) > 0 && rms(q.L, 4000, 24000) > 0.05f, "GRAIN MIX centre: both");
+    }
+    {   // 0.5: LOW CUT removes the lows (110 Hz at 1 kHz cut)
+        auto low = sine(110.f, 2.f);
+        auto e = make(low.get()); e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64;
+        Run a = render(*e, 24000);
+        auto f = make(low.get()); f->bank.patterns[0].on[0][0] = 1; f->bank.patterns[0].len[0] = 64; f->trackParam[0][tpLOWCUT] = 95.f;
+        Run b = render(*f, 24000);
+        check(rms(b.L, 6000, 24000) < 0.1f * rms(a.L, 6000, 24000), "LOW CUT removes what is under it");
+    }
+    {   // 0.5: LFO 3 moves its destination too
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].len[0] = 64; e->trackParam[0][tpSCAN] = 64.f; e->trackParam[0][tpPOSITION] = 64.f;
+        e->trackParam[0][lfoParam(2, 0)] = (2 + 0.5f) * 128.f / kLfoWaves;
+        e->trackParam[0][lfoParam(2, 1)] = 127.f * std::log(1.f / 0.03f) / std::log(1000.f);
+        e->trackParam[0][lfoParam(2, 3)] = 124.f; e->trackParam[0][lfoParam(2, 4)] = lfoDestKnob(tpPOSITION + 1);
+        float mn = 2.f, mx = -1.f; std::vector<float> L(256), R(256);
+        for (int p = 0; p < 96000; p += 256) { e->process(L.data(), R.data(), 256, Transport()); if (e->outPos[0] >= 0.f) { mn = std::min(mn, e->outPos[0]); mx = std::max(mx, e->outPos[0]); } }
+        check(mn < 0.06f && mx > 0.94f, "LFO 3 on POSITION");
+    }
+    {   // 0.5: 128 steps: step 100 plays
+        auto e = make(s440.get());
+        Pattern& P = e->bank.patterns[0]; P.length = 128; P.len[0] = 128; P.on[0][99] = 1; P.gate[0][99] = 4;
+        e->trackParam[0][tpRELEASE] = 0.f;
+        Run r = render(*e, 6000 * 101);
+        check(rms(r.L, 0, 6000 * 99 - 100) < 1e-4f && rms(r.L, 6000 * 99 + 500, 6000 * 100 - 500) > 0.02f, "128 steps: step 100 plays at its time");
+    }
+    {   // 0.5: REC: a live note while playing comes back as a step + its length, and the step is not played twice
+        auto e = make(s440.get()); e->recording = true;
+        std::vector<float> L(256), R(256);
+        for (int p = 0; p < 6000 * 2 - 256; p += 256) e->process(L.data(), R.data(), 256, Transport());   // just before step 3
+        NoteIn on{0, 0, kBaseNote + 7, 1.f, true};
+        e->process(L.data(), R.data(), 256, Transport(), &on, 1);
+        for (int p = 0; p < 6000; p += 256) e->process(L.data(), R.data(), 256, Transport());
+        NoteIn off{0, 0, kBaseNote + 7, 0.f, false};
+        e->process(L.data(), R.data(), 256, Transport(), &off, 1);
+        RecEvent ev; int n = 0; bool stepOk = false, gateOk = false;
+        while (e->popRec(ev)) { ++n; if (ev.kind == 0) stepOk = ev.step == 2 && ev.note == kBaseNote + 7 && ev.track == 0; else gateOk = ev.step == 2 && ev.gate == 4; }
+        check(n == 2 && stepOk && gateOk, "REC: the note lands on the nearest step with its length (1 step)");
     }
     {   // CPU: four tracks, four-note chords of dense clouds of long grains, stereo, for 4 s
         auto e = make(material(1).get());

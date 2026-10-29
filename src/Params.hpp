@@ -9,7 +9,7 @@
 namespace kn {
 
 static constexpr int kTracks = 4;
-static constexpr int kSteps = 64;          // steps per track
+static constexpr int kSteps = 128;         // steps per track (0.5: 8 pages of 16)
 static constexpr int kPatterns = 16;
 static constexpr int kVoices = 6;          // notes at once per track
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -23,6 +23,9 @@ enum { kGvReverse = 1, kGvOriginal = 2, kGvOctave = 4, kGvLoop = 8 };
 struct GrainView { float a, b, ph, amp, pan, semis; uint8_t voice, flags; };
 struct VoiceView { float head, env; int16_t note; uint8_t slot, released; };
 static constexpr int kViewGrains = 160;
+// REC: what the engine heard while recording, for the UI to write into the pattern
+// kind 0 = a note on a step (note), kind 1 = the length of that note (gate index)
+struct RecEvent { uint8_t kind; int8_t pattern; int8_t track; int16_t step; int16_t note; int16_t gate; };
 
 // ---- grain engine of a track (Kit::mode)
 enum GrainMode { gmClassic = 0, gmCloud, gmLoop, kGrainModes };
@@ -36,19 +39,27 @@ static const char* const kModeHelp[kGrainModes] = {
 enum TrackParam {
     tpSTART = 0, tpEND, tpPOSITION, tpSLICE, tpSCAN, tpSPRAY, tpPITCH, tpPMIX,          // SOURCE
     tpSIZE, tpDENSITY, tpSHAPE, tpSPREAD, tpJITTER, tpREVERSE, tpOCTAVE, tpFINE,        // GRAIN
-    tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE, tpVOLUME, tpPAN,                           // AMP
-    tpFILTER, tpRESO, tpFLTENV, tpDRIVE, tpDELAY, tpREVERB,                             // FX (track)
+    tpATTACK, tpDECAY, tpSUSTAIN, tpRELEASE, tpGMIX, tpDRIVE, tpVOLUME, tpPAN,          // AMP
+    tpFILTER, tpRESO, tpFLTENV, tpLOWCUT, tpDELAY, tpREVERB, tpCHORUS, tpCHAOS,         // FX (track)
     tpL1WAVE, tpL1RATE, tpL1SYNC, tpL1DEPTH, tpL1DEST, tpL1TRIG,                        // LFO 1
     tpL2WAVE, tpL2RATE, tpL2SYNC, tpL2DEPTH, tpL2DEST, tpL2TRIG,                        // LFO 2
+    tpL3WAVE, tpL3RATE, tpL3SYNC, tpL3DEPTH, tpL3DEST, tpL3TRIG,                        // LFO 3
     kTrackParams
 };
-static constexpr int kLfos = 2, kLfoParams = 6;
+static constexpr int kLfos = 3, kLfoParams = 6;
 inline int lfoParam(int i, int k) { return tpL1WAVE + i * kLfoParams + k; }
 static constexpr int kModTargets = tpL1WAVE;         // LFOs can move every knob before the LFOs
-static constexpr int kPages = 6;
-static const char* const kPageNames[kPages] = {"SOURCE", "GRAIN", "AMP", "FX", "LFO 1", "LFO 2"};
-static const int kPageStart[kPages + 1] = {0, 8, 16, 22, 28, 34, 40};
+static constexpr int kPages = 7;
+static const char* const kPageNames[kPages] = {"SOURCE", "GRAIN", "AMP", "FX", "LFO 1", "LFO 2", "LFO 3"};
+static const int kPageStart[kPages + 1] = {0, 8, 16, 24, 32, 38, 44, 50};
 struct TrackParamDef { const char* name; uint8_t def; const char* help; };
+#define KN_LFO_DEFS \
+    {"WAVE",     0,   "LFO shape: triangle, sine, square, saw up, saw down, random"}, \
+    {"RATE",     50,  "LFO speed (with SYNC: a note value)"}, \
+    {"SYNC",     0,   "Right half: the LFO follows the tempo"}, \
+    {"DEPTH",    64,  "How far the LFO moves its destination (centre = nothing, left = the other way)"}, \
+    {"DEST",     0,   "The knob the LFO moves"}, \
+    {"TRIG",     0,   "Right half: the LFO starts again with every note"}
 static const TrackParamDef kTP[kTrackParams] = {
     {"START",    0,   "Start of the part of the sample (or slice) that plays"},
     {"END",      127, "End of the part of the sample (or slice) that plays"},
@@ -70,36 +81,35 @@ static const TrackParamDef kTP[kTrackParams] = {
     {"DECAY",    64,  "Time to fall from full level to SUSTAIN"},
     {"SUSTAIN",  127, "Level held while the note lasts (its step length, or the key)"},
     {"RELEASE",  50,  "Fade-out after the note ends"},
+    {"GRAIN MIX",127, "Left = the sample as it is (played straight from START to END at the note's pitch), right = the grains"},
+    {"DRIVE",    0,   "Warm saturation of the track"},
     {"VOLUME",   100, "Track level"},
     {"PAN",      64,  "Track position in the stereo field"},
     {"FILTER",   64,  "Left = low pass, right = high pass, centre = off"},
     {"RESO",     20,  "Filter resonance"},
     {"FLT ENV",  64,  "How much each note's envelope moves the filter (left = closes, right = opens)"},
-    {"DRIVE",    0,   "Warm saturation of the track"},
+    {"LOW CUT",  0,   "A second filter that removes the lows (0 = off)"},
     {"DELAY",    0,   "Send to the echo"},
     {"REVERB",   0,   "Send to the reverb"},
-    {"WAVE",     0,   "LFO shape: triangle, sine, square, saw up, saw down, random"},
-    {"RATE",     50,  "LFO speed (with SYNC: a note value)"},
-    {"SYNC",     0,   "Right half: the LFO follows the tempo"},
-    {"DEPTH",    64,  "How far the LFO moves its destination (centre = nothing, left = the other way)"},
-    {"DEST",     0,   "The knob the LFO moves"},
-    {"TRIG",     0,   "Right half: the LFO starts again with every note"},
-    {"WAVE",     0,   "LFO shape: triangle, sine, square, saw up, saw down, random"},
-    {"RATE",     50,  "LFO speed (with SYNC: a note value)"},
-    {"SYNC",     0,   "Right half: the LFO follows the tempo"},
-    {"DEPTH",    64,  "How far the LFO moves its destination (centre = nothing, left = the other way)"},
-    {"DEST",     0,   "The knob the LFO moves"},
-    {"TRIG",     0,   "Right half: the LFO starts again with every note"},
+    {"CHORUS",   0,   "Send to the chorus"},
+    {"CHAOS",    127, "How much of the track CHAOS can catch and repeat"},
+    KN_LFO_DEFS, KN_LFO_DEFS, KN_LFO_DEFS,
 };
+#undef KN_LFO_DEFS
 
 // ---- host parameters: tracks first (track t = indices t*40 .. t*40+39), then the globals.
 // Saved host parameters never move: new ones go just before gOUT_STEP. (0.4.0 redid them all.)
 static constexpr int kGlobalBase = kTracks * kTrackParams;
 enum Global {
-    gREV_SIZE = 0, gREV_TONE, gREV_PRE, gREV_WIDTH, gREV_LEVEL,
-    gDLY_TIME, gDLY_FB, gDLY_HICUT, gDLY_LOCUT, gDLY_WIDTH, gDLY_LEVEL,
-    gCHO_RATE, gCHO_DEPTH, gCHO_MIX,
-    gOUTPUT, gDRIVE, gLOWCUT, gHIGHCUT,
+    // the master effects of KDSP-16 (MasterFx.hpp, shared): same names and the same order inside this block
+    gECHO_TIME = 0, gECHO_FB, gECHO_LPF, gECHO_HPF, gECHO_WIDTH, gECHO_LEV,
+    gREV_SIZE, gREV_DAMP, gREV_GATE, gREV_HPF, gREV_PRE, gREV_LEV,
+    gEQ_LOW, gEQ_HIGH, gCMP_THR, gCMP_RAT, gCMP_ATK, gCMP_REL, gDRIVE, gVOLUME,
+    gECHO_MODEL, gECHO_MOD, gREV_MODEL, gREV_MOD,
+    gMF_HP, gMF_LP, gMF_RESO,
+    gCHO_MODEL, gCHO_RATE, gCHO_DEPTH, gCHO_TIME, gCHO_FB, gCHO_WIDTH, gCHO_TONE, gCHO_LEV,
+    gGL_CHANCE, gGL_SIZE, gGL_LEN, gGL_PITCH, gGL_FADE, gGL_REV, gGL_MIX,
+    gMF_ON, gECHO_RTIME, gECHO_DRIVE, gECHO_DUCK, gECHO_FREEZE,
     gTEMPO, gPLAY, gPATTERN, gFREEZE, gCAPLEN,
     gOUT_STEP, gOUT_ACTIVE, gOUT_PATTERN, gOUT_POS1, gOUT_POS2, gOUT_POS3, gOUT_POS4, gOUT_IN, kGlobalParams
 };
@@ -113,25 +123,50 @@ inline float trackDefault(int t, int k)
 {
     if (k >= tpL1WAVE) return trackParamDefault(k);
     static const int8_t d[kTracks][kModTargets] = {
-        // STA END POS SLC SCAN SPRY PIT PMIX  SIZE DENS SHAP SPRD JIT REV OCT FINE  ATK DEC SUS REL VOL PAN  FILT RES FENV DRV DLY REV
-        {   0, 127, 30,  0,  72,  30, 64, 127,   80, 100,  64,  85,  20, 15,  0, 64,   70, 64, 127, 70, 96, 64,   64, 20, 64,  0,  0, 45 },
-        {   0, 127, 10,  0,  80,  12, 64, 127,   76,  80,  64,  65,  12,  0,  0, 64,   12, 64, 127, 60, 92, 64,   64, 20, 64,  0, 20, 35 },
-        {   0, 127,  0,  0,  96,   0, 64, 127,   48,   0,  10,  25,   0,  0,  0, 64,    0, 64, 127, 30,100, 64,   64, 20, 64,  0,  0, 12 },
-        {   0, 127, 20,  0,  70,  70, 64, 127,   45, 110,  70, 110,  25, 30, 25, 64,    0, 90,  80, 70, 84, 64,   64, 20, 64,  0, 40, 50 },
+        // STA END POS SLC SCAN SPRY PIT PMIX  SIZE DENS SHAP SPRD JIT REV OCT FINE  ATK DEC SUS REL GMIX DRV VOL PAN  FILT RES FENV LCUT DLY REV CHO CHA
+        {   0, 127, 30,  0,  72,  30, 64, 127,   80, 100,  64,  85,  20, 15,  0, 64,   70, 64, 127, 70, 127,  0, 96, 64,   64, 20, 64,   0,  0, 45,  0, 127 },
+        {   0, 127, 10,  0,  80,  12, 64, 127,   76,  80,  64,  65,  12,  0,  0, 64,   12, 64, 127, 60, 127,  0, 92, 64,   64, 20, 64,   0, 20, 35,  0, 127 },
+        {   0, 127,  0,  0,  96,   0, 64, 127,   48,   0,  10,  25,   0,  0,  0, 64,    0, 64, 127, 30, 127,  0,100, 64,   64, 20, 64,   0,  0, 12,  0, 127 },
+        {   0, 127, 20,  0,  70,  70, 64, 127,   45, 110,  70, 110,  25, 30, 25, 64,    0, 90,  80, 70, 127,  0, 84, 64,   64, 20, 64,   0, 40, 50,  0, 127 },
     };
     return t >= 0 && t < kTracks && k >= 0 ? (float)d[t][k] : trackParamDefault(k);
 }
+// master effect names and defaults (as KDSP-16)
+static constexpr int kMasterCount = gGL_MIX - gECHO_TIME + 1;
+static const char* const kMasterNames[kMasterCount] = {
+    "TIME", "FEEDBACK", "HIGH CUT", "LOW CUT", "WIDTH", "LEVEL",
+    "DECAY", "DAMPING", "GATE", "LOW CUT", "PRE-DELAY", "LEVEL",
+    "LOW", "HIGH", "THRESH", "RATIO", "ATTACK", "RELEASE", "DRIVE", "VOLUME",
+    "MODEL", "MOD", "MODEL", "MOD",
+    "HIGH PASS", "LOW PASS", "RESONANCE",
+    "MODEL", "RATE", "DEPTH", "TIME", "FEEDBACK", "WIDTH", "TONE", "LEVEL",
+    "CHANCE", "SIZE", "LENGTH", "PITCH", "FADE", "REVERSE", "MIX"
+};
+static const uint8_t kMasterDefaults[kMasterCount] = {
+    48, 50, 100, 10, 64, 64,
+    60, 64, 0, 20, 10, 64,
+    64, 64, 127, 40, 20, 50, 0, 116,                // VOLUME 116 = unity gain (KDSP-16: 100)
+    0, 30, 52, 30,
+    0, 127, 0,
+    0, 30, 50, 40, 0, 100, 100, 64,
+    0, 70, 50, 64, 30, 0, 127
+};
 inline float globalDefault(int g)
 {
+    if (g >= gECHO_TIME && g < gECHO_TIME + kMasterCount) return kMasterDefaults[g - gECHO_TIME];
     switch (g) {
-    case gREV_SIZE: return 80.f; case gREV_TONE: return 90.f; case gREV_PRE: return 20.f; case gREV_WIDTH: return 110.f; case gREV_LEVEL: return 100.f;
-    case gDLY_TIME: return 88.f; case gDLY_FB: return 60.f; case gDLY_HICUT: return 96.f; case gDLY_LOCUT: return 20.f; case gDLY_WIDTH: return 110.f; case gDLY_LEVEL: return 100.f;
-    case gCHO_RATE: return 40.f; case gCHO_DEPTH: return 60.f; case gCHO_MIX: return 0.f;
-    case gOUTPUT: return 96.f; case gDRIVE: return 0.f; case gLOWCUT: return 0.f; case gHIGHCUT: return 127.f;
+    case gMF_ON: return 1.f; case gECHO_RTIME: return 64.f;
     case gTEMPO: return 120.f; case gOUT_STEP: return -1.f; case gCAPLEN: return 1.f;
     default: return 0.f;
     }
 }
+// echo divisions (in beats), as KDSP-16
+static constexpr int kEchoDivs = 12;
+static const float kEchoBeats[kEchoDivs] = {1.f / 16, 1.f / 8, 1.f / 6, 1.f / 4, 1.f / 3, 3.f / 8, 1.f / 2, 2.f / 3, 3.f / 4, 1.f, 1.5f, 2.f};
+static const char* const kEchoNames[kEchoDivs] = {"1/64", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2"};
+inline int echoDivIndex(int v) { return v * kEchoDivs / 128; }
+inline float cutoffHz(float v) { return 20.f * std::pow(1000.f, (v < 0 ? 0 : (v > 127 ? 127 : v)) / 127.f); }
+
 // CAPTURE / LIVE length in bars (index = gCAPLEN)
 static constexpr int kCapLens = 4;
 static const int kCapBars[kCapLens] = {1, 2, 4, 8};
@@ -256,7 +291,9 @@ inline std::string trackValueText(int k, float v, int slices = 0, int mode = gmC
         std::snprintf(b, sizeof(b), "%s X%.1f", cloudRandom(v) ? "RND" : "REG", cloudOverlap(v)); return b;
     case tpSHAPE: if (mode == gmLoop) { std::snprintf(b, sizeof(b), "XF %d%%", (int)std::lround(v / 127.f * 50.f)); return b; } return shapeName(v);
     case tpSPRAY: if (v < 0.5f) return "OFF"; std::snprintf(b, sizeof(b), "%d MS", (int)std::lround(spraySec(v) * 1000.f)); return b;
-    case tpJITTER: case tpREVERSE: case tpOCTAVE: case tpSPREAD: case tpDRIVE: case tpDELAY: case tpREVERB: return pctText(v);
+    case tpJITTER: case tpREVERSE: case tpOCTAVE: case tpSPREAD: case tpDRIVE: case tpDELAY: case tpREVERB: case tpCHORUS: case tpCHAOS: return pctText(v);
+    case tpGMIX: if (v < 0.5f) return "SAMPLE"; if (v > 126.5f) return "GRAINS"; std::snprintf(b, sizeof(b), "%d%%", (int)std::lround(v / 127.f * 100.f)); return b;
+    case tpLOWCUT: { if (v < 0.5f) return "OFF"; const float hz = cutHz(v, 20.f, 2000.f); if (hz >= 1000.f) std::snprintf(b, sizeof(b), "%.1fK", hz / 1000.f); else std::snprintf(b, sizeof(b), "%d HZ", (int)hz); return b; }
     case tpATTACK: return secText(attackSec(v));
     case tpDECAY: return secText(decaySec(v));
     case tpSUSTAIN: return pctText(v);

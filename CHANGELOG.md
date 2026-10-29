@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+- The effects of KDSP-16: ECHO (8 models: digital, tape, BBD, ping-pong, lo-fi, multi-tap, reverse, diffuse, with MOD,
+  R TIME, DRIVE, DUCK and FREEZE), REVERB (room, plate, hall, spring, shimmer), CHORUS (chorus, ensemble, flanger), CHAOS
+  (slices of the tracks caught and repeated, HOLD pad), master FILTER and MASTER (EQ, compressor, drive, volume). Each
+  track sends to them from its FX page (DELAY, REVERB, CHORUS, CHAOS).
+- GRAIN MIX per track: the sample played straight (from POSITION to END, looping, at the note's pitch) on one side, the
+  grains on the other.
+- LOW CUT per track (a second filter), a third LFO per track, and LFO-moved knobs drawn as in the other Kinetik plug-ins
+  (the arc follows the modulation in the LFO's colour, L1 / L2 / L3 badge).
+- REC at the bottom left (with CLICK): while playing, notes played on the keyboard or by MIDI are written on the selected
+  track's steps (with their length; notes played together become a chord when they match one), knob moves become locks.
+  One undo per take.
+- RESET: every knob and effect back to its default; the samples, materials, slices and patterns stay.
+- 128 steps per track (8 pages). Presets, SAVE AS PRESET, FILL and UNDO in a bar at the bottom; the window is 1180 x 800.
+- The text under the grain display is gone.
+- Banks and presets of 0.4 are converted; host automation of older projects no longer matches the knobs.
+
 ## 0.4.1
 
 - Polyphony you can play: MIDI channel 1 now plays the selected track with 6 voices (channels 2-5 still play tracks 1-4;
