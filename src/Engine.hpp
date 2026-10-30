@@ -308,6 +308,7 @@ public:
                 runArp(t, playing ? beat : freeBeat + pos * bpf, n);
                 runLfos(t, beat, playing, (float)n / sr); setupTrack(t); voiceCount += activeVoices(t);
             }
+            const float fxEDecay = std::exp(-(float)n / (1.2f * sr));      // tail energy: about a reverb's decay
             float audT[kTracks];
             for (int t = 0; t < kTracks; ++t) audT[t] = (!bank.kit[t].mute && (!anySolo || bank.kit[t].solo)) ? 1.f : 0.f;
             for (uint32_t i = 0; i < n; ++i) {
@@ -316,6 +317,7 @@ public:
                 const double bt = playing ? beat + i * bpf : freeBeat + (pos + i) * bpf;
                 if (playing) { const int64_t bar = (int64_t)std::floor(bt / 4.0 + 1e-9); if (bar != lastBar) { lastBar = bar; barW = liveW; } }
                 float mixL = 0.f, mixR = 0.f, dSend = 0.f, dSendR = 0.f, rL = 0.f, rR = 0.f, cL = 0.f, cR = 0.f, gL = 0.f, gR = 0.f;
+                if (i == 0) for (auto& T : tr) for (float& e : T.fxE) e *= fxEDecay;
                 for (int t = 0; t < kTracks; ++t) {
                     TrackState& T = tr[t];
                     T.audG += (audT[t] - T.audG) * muteSm;
@@ -328,6 +330,8 @@ public:
                     mixL += l; mixR += r;
                     dSend += l * T.dSend; dSendR += r * T.dSend; rL += l * T.rSend; rR += r * T.rSend;
                     cL += l * T.cSend; cR += r * T.cSend; gL += l * T.gSend; gR += r * T.gSend;
+                    const float e = l * l + r * r;
+                    T.fxE[0] += e * T.dSend * T.dSend; T.fxE[1] += e * T.rSend * T.rSend; T.fxE[2] += e * T.cSend * T.cSend;
                 }
                 const uint32_t j = pos + i;
                 bML[j] = mixL; bMR[j] = mixR; bDL[j] = dSend; bDR[j] = dSendR; bRL[j] = rL; bRR[j] = rR;
@@ -336,7 +340,21 @@ public:
             pos += n;
         }
         // the master effects of KDSP-16 (echo, reverb, chorus, CHAOS, EQ, compressor, drive, volume), the click, the filter
-        fx.process(global, (float)bpm, bML.data(), bMR.data(), bDL.data(), bDR.data(), bRL.data(), bRR.data(), bCL.data(), bCR.data(),
+        // MUTE / SOLO also cut what a silenced track left in the echo, reverb and chorus: each return is scaled by the share
+        // of its tail energy that comes from tracks still heard (one silenced sender = its tail stops at once)
+        float gfx[kGlobalParams];
+        std::memcpy(gfx, global, sizeof(gfx));
+        {
+            static const int lev[3] = {gECHO_LEV, gREV_LEV, gCHO_LEV};
+            for (int f = 0; f < 3; ++f) {
+                double all = 0.0, heard = 0.0;
+                for (int t = 0; t < kTracks; ++t) { all += tr[t].fxE[f]; if (!bank.kit[t].mute && (!anySoloNow() || bank.kit[t].solo)) heard += tr[t].fxE[f]; }
+                const float target = all > 1e-9 ? (float)std::sqrt(heard / all) : 1.f;
+                retG[f] = target < retG[f] ? std::max(target, retG[f] - 0.5f) : std::min(target, retG[f] + 0.25f);
+                gfx[lev[f]] = global[lev[f]] * std::sqrt(retG[f]);      // return gain = 3.2 x^2: x * sqrt(g) scales it by g
+            }
+        }
+        fx.process(gfx, (float)bpm, bML.data(), bMR.data(), bDL.data(), bDR.data(), bRL.data(), bRR.data(), bCL.data(), bCR.data(),
                    bGL.data(), bGR.data(), playing ? b0 : freeBeat, playing, outL, outR, frames);
         click.process(outL, outR, frames, b0, bpf, recording && playing);
         masterFilter(outL, outR, frames);
@@ -474,6 +492,7 @@ private:
     struct TrackState {
         Voice v[kSlots]; int64_t lastK = INT64_MIN, k0 = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
         float audG = 1.f;                 // MUTE / SOLO gain (ramped: a mute silences what already plays, at once)
+        float fxE[3] = {0.f, 0.f, 0.f};   // energy this track has put into echo / reverb / chorus, decaying like a tail
         bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, cSend = 0.f, gSend = 1.f, drive = 0.f;
         int64_t recSkipK = INT64_MIN;
         // ARP: the notes it plays (held keys / MIDI and the sequencer's step notes)
@@ -525,7 +544,9 @@ private:
     TrackState tr[kTracks];
     GrainWindows win;
     MasterFx fx;
-    static constexpr uint32_t kBlock = 1024;
+    float retG[3] = {1.f, 1.f, 1.f};             // echo / reverb / chorus return gains (MUTE / SOLO of their senders)
+    bool anySoloNow() const { for (int t = 0; t < kTracks; ++t) if (bank.kit[t].solo) return true; return false; }
+    static constexpr uint32_t kBlock = 256;      // 0.7.3: 256 (was 1024) so a mute also cuts the effect returns at once
     std::vector<float> bML, bMR, bDL, bDR, bRL, bRR, bCL, bCR, bGL, bGR;
     // master HP / LP filter with resonance, after the master FX (FILTER tab), as KDSP-16
     Svf mfHp[2], mfLp[2];

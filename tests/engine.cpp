@@ -471,6 +471,14 @@ int main()
         std::printf("     mute %.4f %.5f %.4f\n", rms(a.L, 6000, 12000), rms(b.L, 1000, 12000), rms(c.L, 1000, 12000));
         check(rms(a.L, 6000, 12000) > 0.02f && rms(b.L, 2000, 12000) < 1e-3f && rms(c.L, 1000, 12000) > 0.02f, "MUTE: silences the held note at once, unmute brings it back");
         e->bank.kit[1].solo = 1; Run d = render(*e, 12000);
+        e->bank.kit[1].solo = 0;
+        // with echo and reverb: the tails of a muted track stop too (the owner: "le son doit couper instantanément")
+        e->trackParam[0][tpDELAY] = 110.f; e->trackParam[0][tpREVERB] = 120.f; e->global[gREV_SIZE] = 120.f; e->global[gECHO_FB] = 110.f;
+        Run w = render(*e, 24000);
+        e->bank.kit[0].mute = 1; Run x = render(*e, 12000);
+        std::printf("     with effects %.4f, after mute %.6f (10-250 ms):", rms(w.L, 12000, 24000), rms(x.L, 480, 12000)); for (int q = 0; q < 12000; q += 1000) std::printf(" %.5f", rms(x.L, q, q + 1000)); std::printf("\n");
+        check(rms(w.L, 12000, 24000) > 0.02f && rms(x.L, 1440, 12000) < 1e-3f, "MUTE: echo and reverb tails (after 30 ms) of the track stop at once too");
+        e->bank.kit[0].mute = 0;
         check(rms(d.L, 2000, 12000) < 1e-3f, "SOLO on another track silences a note that already plays");
     }
     {   // the voice filter and its envelope: a low pass with FLT ENV up is brighter at the attack than later

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3
+
+- MUTE / SOLO cut the sound instantly, effect tails included: what a silenced track left in the echo, reverb and
+  chorus stops at once (within about 10 ms) while the other tracks keep theirs. Unmuting brings it back.
+
 ## 0.7.2
 
 - MUTE (and SOLO) now silence a track at once, notes already playing included (held notes, long releases, live notes,

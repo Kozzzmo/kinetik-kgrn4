@@ -176,3 +176,10 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
 
 - MUTE / SOLO only skipped new trigs: held notes kept sounding. Now `TrackState::audG` ramps (4 ms, `muteSm`) to 0 / 1 from
   `audT` (mute, solo) and scales the track's output and sends. Test: a HOLD note goes silent and comes back.
+
+## 0.7.3 (owner: "le mute ne fonctionne toujours pas", "il faut que le son coupe instantanément")
+
+- 0.7.2 cut the dry sound but the echo / reverb / chorus tails of the muted track went on. Now each track keeps the energy it
+  sent to each effect (`TrackState::fxE[3]`, decaying over ~1.2 s, `fxEDecay`); before `fx.process` the returns
+  (`gECHO_LEV gREV_LEV gCHO_LEV` in a copy `gfx` of the globals) are scaled by sqrt(heard energy / all energy) (`retG`, down
+  0.5 per block, up 0.25). `kBlock` 256 (was 1024) so the cut lands within ~10 ms. Test: tails silent 30 ms after a mute.
