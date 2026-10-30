@@ -171,3 +171,8 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
   effects. Now `T.dSend / rSend / cSend = send / 127 * 1.4` as `Engine::controlTrack` of KDSP-16; `PB::tp` converts the
   presets' DELAY / REVERB (voiced on the squared curve: v^2 / (127 * 1.4)); `trackDefault` sends lowered. Test: models differ,
   wet level against the dry note (> -12 dB at send 90).
+
+## 0.7.2 (owner: "les boutons mute ne fonctionnent pas correctement")
+
+- MUTE / SOLO only skipped new trigs: held notes kept sounding. Now `TrackState::audG` ramps (4 ms, `muteSm`) to 0 / 1 from
+  `audT` (mute, solo) and scales the track's output and sends. Test: a HOLD note goes silent and comes back.

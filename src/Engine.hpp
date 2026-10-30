@@ -237,6 +237,7 @@ public:
         spb = 60.0 * sr / bpm;
         if (!playing) { for (auto& T : tr) T.recSkipK = INT64_MIN; }
         const float sm = 1.f - std::exp(-1.f / (0.02f * sr));
+        const float muteSm = 1.f - std::exp(-1.f / (0.004f * sr));   // 4 ms mute / solo ramps
         const bool freeze = global[gFREEZE] > 0.5f;
         bool anySolo = false; for (int t = 0; t < kTracks; ++t) anySolo = anySolo || bank.kit[t].solo;
         liveMips = false; for (int t = 0; t < kTracks; ++t) liveMips = liveMips || isLive(t);
@@ -307,6 +308,8 @@ public:
                 runArp(t, playing ? beat : freeBeat + pos * bpf, n);
                 runLfos(t, beat, playing, (float)n / sr); setupTrack(t); voiceCount += activeVoices(t);
             }
+            float audT[kTracks];
+            for (int t = 0; t < kTracks; ++t) audT[t] = (!bank.kit[t].mute && (!anySolo || bank.kit[t].solo)) ? 1.f : 0.f;
             for (uint32_t i = 0; i < n; ++i) {
                 // the input buffer (bar starts are remembered for CAPTURE)
                 if (!freeze) liveWrite(inL ? inL[pos + i] : 0.f, inR ? inR[pos + i] : 0.f);
@@ -315,12 +318,13 @@ public:
                 float mixL = 0.f, mixR = 0.f, dSend = 0.f, dSendR = 0.f, rL = 0.f, rR = 0.f, cL = 0.f, cR = 0.f, gL = 0.f, gR = 0.f;
                 for (int t = 0; t < kTracks; ++t) {
                     TrackState& T = tr[t];
+                    T.audG += (audT[t] - T.audG) * muteSm;
                     if (!T.busy) continue;
                     float l = 0.f, r = 0.f;
                     for (auto& v : T.v) if (v.active) renderVoice(t, v, l, r, bt, playing);
                     if (T.drive > 0.001f) { const float g = 1.f + T.drive * 7.f, c = 1.f / std::sqrt(g); l = std::tanh(l * g) * c; r = std::tanh(r * g) * c; }
                     T.vol += (T.volT - T.vol) * sm;
-                    l *= T.vol; r *= T.vol;
+                    l *= T.vol * T.audG; r *= T.vol * T.audG;
                     mixL += l; mixR += r;
                     dSend += l * T.dSend; dSendR += r * T.dSend; rL += l * T.rSend; rR += r * T.rSend;
                     cL += l * T.cSend; cR += r * T.cSend; gL += l * T.gSend; gR += r * T.gSend;
@@ -469,6 +473,7 @@ private:
     };
     struct TrackState {
         Voice v[kSlots]; int64_t lastK = INT64_MIN, k0 = INT64_MIN; int step = -1; uint32_t serial = 0; Rng rng;
+        float audG = 1.f;                 // MUTE / SOLO gain (ramped: a mute silences what already plays, at once)
         bool busy = false; float vol = 0.f, volT = 0.f, dSend = 0.f, rSend = 0.f, cSend = 0.f, gSend = 1.f, drive = 0.f;
         int64_t recSkipK = INT64_MIN;
         // ARP: the notes it plays (held keys / MIDI and the sequencer's step notes)

@@ -462,6 +462,17 @@ int main()
         Run r = render(*e, 12000);
         check(e->activeVoices(0) == 0 && e->activeVoices(1) == 1 && rms(r.L, 2000, 12000) > 0.02f, "SOLO: the other tracks are silent");
     }
+    {   // MUTE: a held note goes silent at once (not only the next trigs), and comes back when unmuted
+        auto e = make(s440.get());
+        e->bank.patterns[0].on[0][0] = 1; e->bank.patterns[0].gate[0][0] = kGateHold; e->bank.patterns[0].len[0] = 64;
+        Run a = render(*e, 12000);
+        e->bank.kit[0].mute = 1; Run b = render(*e, 12000);
+        e->bank.kit[0].mute = 0; Run c = render(*e, 12000);
+        std::printf("     mute %.4f %.5f %.4f\n", rms(a.L, 6000, 12000), rms(b.L, 1000, 12000), rms(c.L, 1000, 12000));
+        check(rms(a.L, 6000, 12000) > 0.02f && rms(b.L, 2000, 12000) < 1e-3f && rms(c.L, 1000, 12000) > 0.02f, "MUTE: silences the held note at once, unmute brings it back");
+        e->bank.kit[1].solo = 1; Run d = render(*e, 12000);
+        check(rms(d.L, 2000, 12000) < 1e-3f, "SOLO on another track silences a note that already plays");
+    }
     {   // the voice filter and its envelope: a low pass with FLT ENV up is brighter at the attack than later
         auto saw = std::make_shared<SampleData>(); saw->sr = 48000;
         for (int i = 0; i < 96000; ++i) saw->pcm.push_back(0.4f * (float)(2.0 * std::fmod(i * 220.0 / 48000.0, 1.0) - 1.0));

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2
+
+- MUTE (and SOLO) now silence a track at once, notes already playing included (held notes, long releases, live notes,
+  the arpeggiator); before, only the next steps were skipped. Unmuting brings back what still plays. 4 ms ramps, no click.
+
 ## 0.7.1
 
 - The effects (KDSP-16's echo, reverb, chorus and CHAOS engines) were fed far too softly: the track sends were squared,
