@@ -183,3 +183,10 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
   sent to each effect (`TrackState::fxE[3]`, decaying over ~1.2 s, `fxEDecay`); before `fx.process` the returns
   (`gECHO_LEV gREV_LEV gCHO_LEV` in a copy `gfx` of the globals) are scaled by sqrt(heard energy / all energy) (`retG`, down
   0.5 per block, up 0.25). `kBlock` 256 (was 1024) so the cut lands within ~10 ms. Test: tails silent 30 ms after a mute.
+
+## 0.8.0 — new factory presets
+
+- `Presets.hpp`: `PB2` helpers (`row(pattern, track, "x..", gate, speed)`, `notes` (semitones + chords per lit step), `cyc`,
+  `lock`, `cond`, `ratch`, `flt`, `sends`, `scaleNotes` (NOTES page), `arp`, `lfo` / `lfoFree`, `copy`, `chain`, `mix({dB})`
+  per-track level from the mix checker); `PresetDef::trimDb` = master VOLUME first, then every track VOLUME by the same
+  factor (limited at 127), about -16 LUFS.

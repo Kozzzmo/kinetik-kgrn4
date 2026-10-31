@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- **New factory presets**: 12 pieces over 4 bars (64 steps) on the built-in materials, all in C minor. They use step
+  notes and chords, gates, ratchets and conditions, the NOTES page (grains forced into a scale), the FILTER page, the ARP,
+  the three LFOs, echo / reverb / chorus / CHAOS sends and, in two of them, a second pattern in a CHAIN
+  (Grain Arp and Scale Cloud are new).
+- Every track of every preset was levelled with a mix measurement, and every preset plays at about the same loudness.
+
 ## 0.7.3
 
 - MUTE / SOLO cut the sound instantly, effect tails included: what a silenced track left in the echo, reverb and
