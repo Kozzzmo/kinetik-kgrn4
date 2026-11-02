@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- **Same layout as the other Kinetik plug-ins.** One window size (1180 x 800) and a common bottom bar at the same place in every plug-in: REC / CLICK, RANDOM (a menu), FILL (HOLD), UNDO (shows what it undoes), the plug-in's own buttons, PRESETS (with the preset's name) and SAVE. PAT / PLAY / BPM / SKIN keep the same spot in the header.
+- **New RANDOM menu** for the selected track: STEPS (which steps play, more on the beats), NOTES (in the scale, or a minor pentatonic when the scale is off) and SOUND (position, scan, spray, grain size / density / shape / spread / jitter, filter). UNDO restores.
+- RESET, SCALE and ROOT sit in the bottom bar; track toolbar COPY PASTE CLEAR in the family's order.
+
 ## 0.8.1
 
 - **SHIMMER reverb rebuilt.** The octave-up sound now lives inside the reverb's own feedback, crossfaded with the normal tail instead of added on top: no more build-up and crackle when MOD goes past the middle, the reverb keeps the colour of what you send it, and MOD really brings in the shimmering octave above (finer, wider, a little detuned between lines).

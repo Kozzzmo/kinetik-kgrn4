@@ -7,6 +7,7 @@
 #include "Materials.hpp"
 #include "MasterFx.hpp"
 #include "Skins.hpp"
+#include "Frame.hpp"
 #include "LogoMark.hpp"
 #include "Fonts.hpp"
 #include "License.hpp"
@@ -36,7 +37,7 @@ START_NAMESPACE_DISTRHO
 using namespace kn;
 using DGL_NAMESPACE::Color;
 
-static constexpr float W = 1180.f, H = 800.f;
+static constexpr float W = kframe::kW, H = kframe::kH;
 static constexpr int kFineSteps = 24;   // out_step is in 1/24 of a 16th
 
 struct R {
@@ -51,6 +52,8 @@ enum Overlay { ovNone, ovPresets, ovSkins, ovSave, ovLicense, ovUpdate, ovChain,
 
 class KgrnUI : public UI
 {
+    template <class, class> friend struct kframe::Draw;
+    static R fr(const kframe::Rc& c) { return R{c.x, c.y, c.w, c.h}; }
 public:
     KgrnUI()
         : UI(W, H)
@@ -380,15 +383,15 @@ protected:
 
     // ------------------------------------------------------------------ layout (0.4: one track at a time, as KMSP-6 / KDSP-16)
     R logoArea() const { return {12.f, 4.f, 284.f, 50.f}; }
-    R inBox() const { return {300.f, 9.f, 72.f, 40.f}; }
-    R freezeBtn() const { return {376.f, 9.f, 74.f, 40.f}; }
-    R capLenBox() const { return {454.f, 9.f, 76.f, 40.f}; }
-    R patLenBox() const { return {536.f, 9.f, 76.f, 40.f}; }
-    R swingBox() const { return {618.f, 9.f, 76.f, 40.f}; }
-    R patBox() const { return {700.f, 9.f, 130.f, 40.f}; }
-    R playBtn() const { return {840.f, 9.f, 84.f, 40.f}; }
-    R tempoBox() const { return {932.f, 9.f, 110.f, 40.f}; }
-    R skinBtn() const { return {1050.f, 9.f, 116.f, 40.f}; }
+    R inBox() const { return {298.f, 9.f, 72.f, 40.f}; }
+    R freezeBtn() const { return {374.f, 9.f, 74.f, 40.f}; }
+    R capLenBox() const { return {452.f, 9.f, 76.f, 40.f}; }
+    R patLenBox() const { return {534.f, 9.f, 76.f, 40.f}; }
+    R swingBox() const { return {616.f, 9.f, 76.f, 40.f}; }
+    R patBox() const { return fr(kframe::patBox()); }
+    R playBtn() const { return fr(kframe::playBtn()); }
+    R tempoBox() const { return fr(kframe::tempoBox()); }
+    R skinBtn() const { return fr(kframe::skinBtn()); }
     // track tabs
     R trackTab(int t) const { return {14.f + t * 289.f, 60.f, 283.f, 50.f}; }
     R soloBtn(int t) const { const R r = trackTab(t); return {r.x + r.w - 64.f, r.y + 27.f, 28.f, 18.f}; }
@@ -400,8 +403,8 @@ protected:
     R lockClearBtn() const { return {190.f, 122.f, 104.f, 22.f}; }
     R zoomBtn2() const { return {588.f, 122.f, 58.f, 22.f}; }
     R loopBtn() const { return {190.f, 122.f, 104.f, 22.f}; }
-    R scaleBox() const { return {626.f, 722.f, 110.f, 64.f}; }
-    R rootBox() const { return {740.f, 722.f, 52.f, 64.f}; }
+    R scaleBox() const { return fr(kframe::extraBtn(694.f, 84.f)); }
+    R rootBox() const { return fr(kframe::extraBtn(784.f, 50.f)); }
     R waveR() const { return {20.f, 148.f, 620.f, 118.f}; }
     R mixZone() const { return {646.f, 148.f, 52.f, 118.f}; }   // SAMPLE / GRAINS fader, outside the pages
     R trackResetBtn() const { return {592.f, 272.f, 106.f, 26.f}; }
@@ -433,13 +436,15 @@ protected:
     R patClear() const { return {1090.f, 358.f, 70.f, 22.f}; }
     R patBtn(int i) const { return {720.f + (i % 8) * 55.f, 386.f + (i / 8) * 28.f, 51.f, 24.f}; }
     // bottom bar: REC / CLICK at the left, presets at the right
-    R recBtn() const { return {20.f, 722.f, 110.f, 34.f}; }
-    R clickBtn() const { return {20.f, 760.f, 110.f, 26.f}; }
-    R resetBtn() const { return {146.f, 722.f, 120.f, 64.f}; }
-    R fillHoldBtn() const { return {276.f, 722.f, 150.f, 64.f}; }
-    R undoBtn() const { return {436.f, 722.f, 180.f, 64.f}; }
-    R presetBtn() const { return {800.f, 722.f, 360.f, 34.f}; }
-    R saveBtn() const { return {800.f, 760.f, 360.f, 26.f}; }
+    // bottom bar (Frame.hpp): REC CLICK | RANDOM | FILL | UNDO | RESET SCALE ROOT | PRESETS SAVE
+    R recBtn() const { return fr(kframe::recBtn()); }
+    R clickBtn() const { return fr(kframe::clickBtn()); }
+    R rndBtn() const { return fr(kframe::randomBtn()); }
+    R resetBtn() const { return fr(kframe::extraBtn(kframe::kExtrasX, 70.f)); }
+    R fillHoldBtn() const { return fr(kframe::fillBtn()); }
+    R undoBtn() const { return fr(kframe::undoBtn()); }
+    R presetBtn() const { return fr(kframe::presetsBtn()); }
+    R saveBtn() const { return fr(kframe::saveBtn()); }
     R resetBox() const { return {340.f, 260.f, 500.f, 220.f}; }
     R resetOk() const { return {600.f, 420.f, 210.f, 40.f}; }
     R resetCancel() const { return {370.f, 420.f, 150.f, 40.f}; }
@@ -454,9 +459,9 @@ protected:
     R speedBtn() const { return {748.f, 460.f, 84.f, 24.f}; }
     R rotL() const { return {836.f, 460.f, 24.f, 24.f}; }
     R rotR() const { return {862.f, 460.f, 24.f, 24.f}; }
-    R clearTrackBtn() const { return {890.f, 460.f, 52.f, 24.f}; }
-    R copyTrackBtn() const { return {946.f, 460.f, 52.f, 24.f}; }
-    R pasteTrackBtn() const { return {1002.f, 460.f, 52.f, 24.f}; }
+    R copyTrackBtn() const { return {890.f, 460.f, 52.f, 24.f}; }
+    R pasteTrackBtn() const { return {946.f, 460.f, 52.f, 24.f}; }
+    R clearTrackBtn() const { return {1002.f, 460.f, 52.f, 24.f}; }
     R lockClrAll() const { return {1058.f, 460.f, 52.f, 24.f}; }
     R allOnBtn() const { return {1114.f, 460.f, 46.f, 24.f}; }
     R stepCell(int i) const { return {20.f + i * 71.5f, 490.f, 67.f, 80.f}; }
@@ -535,6 +540,7 @@ protected:
         if (overlay == ovUpdate) drawUpdate();
         if (overlay == ovChain) drawChain();
         if (overlay == ovReset) drawReset();
+        if (overlay == ovNone) kframe::Draw<R, KgrnUI>::drawRandomMenu(*this, barInfo());
         if (tipShown && overlay == ovNone) drawTip();
         drawGrip();
     }
@@ -1172,30 +1178,73 @@ protected:
         }
     }
     // the bottom bar: REC / CLICK, RESET, FILL, UNDO, presets
+    kframe::Bar barInfo() const
+    {
+        kframe::Bar b;
+        b.rec = recOn; b.recLive = recOn && gp(gOUT_STEP) >= 0.f; b.click = clickOn;
+        b.fill = fillHeld;
+        b.undoValid = !undoStack.empty(); b.redoValid = !redoStack.empty();
+        if (b.undoValid) b.undoWhat = undoStack.back().what;
+        b.preset = presetNameStr;
+        b.randomOpen = rndOpen;
+        const std::string t = "track " + std::to_string(selTrack + 1);
+        b.randomItems = {{"STEPS", t + ": which steps play"}, {"NOTES", t + ": notes of its steps"}, {"SOUND", t + ": source, grains, filter"}};
+        return b;
+    }
     void drawBottom()
     {
-        const R rb = recBtn();
-        if (recOn) box(rb, Color(236, 36, 50)); else { box(rb, th->btnFill); frame(rb, th->btnEdge); }
-        beginPath(); circle(rb.x + 22, rb.cy(), 5.f); fillColor(recOn ? Color(255, 255, 255) : Color(236, 36, 50)); fill();
-        label(rb.x + 62, rb.cy() + 1, "REC", 12.f, recOn ? Color(255, 255, 255) : th->btnText, ALIGN_CENTER | ALIGN_MIDDLE, th->fontButton);
-        button(clickBtn(), clickOn ? "CLICK ON" : "CLICK OFF", clickOn, 9.f);
-        button(resetBtn(), "RESET", false, 11.f);
-        button(fillHoldBtn(), "FILL (HOLD)", fillHeld, 10.5f);
-        const bool can = !undoStack.empty();
-        {   // UNDO in red, as the other Kinetik plug-ins
-            const R u = undoBtn();
-            if (can) { box(u, th->btnFill); frame(u, th->lock, -1.f, 1.5f); } else { box(u, th->btnFill); frame(u, Color(th->btnEdge, th->bg, 0.5f)); }
-            label(u.cx(), u.y + 24, "UNDO", 11.f, can ? th->lock : th->faint, ALIGN_CENTER | ALIGN_MIDDLE, th->fontButton);
-            label(u.cx(), u.y + 44, can ? undoStack.back().what.c_str() : (!redoStack.empty() ? "right-click: redo" : ""), 9.f, th->dim);
+        using D = kframe::Draw<R, KgrnUI>;
+        D::drawBar(*this, barInfo());
+        D::barButton(*this, kframe::extraBtn(kframe::kExtrasX, 70.f), "RESET", "sound", false);
+        D::barButton(*this, kframe::extraBtn(694.f, 84.f), "SCALE", kScaleNames[bank->scale % kScales], bank->scale != 0);
+        D::barButton(*this, kframe::extraBtn(784.f, 50.f), "ROOT", kRootNames[bank->root % 12], false);
+    }
+    // RANDOM (bottom bar): the selected track's steps, notes or sound; one undo each
+    uint32_t rndSeed = 0x9E3779B9u;
+    float rnd01() { rndSeed = rndSeed * 1664525u + 1013904223u; return (rndSeed >> 8) / 16777216.f; }
+    void randomize(int what)
+    {
+        rndSeed ^= (uint32_t)(nowSec() * 1000.0) * 2654435761u; if (!rndSeed) rndSeed = 1;
+        static const char* names[3] = {"random steps", "random notes", "random sound"};
+        snapshot(names[what]);
+        const int t = selTrack, p = editPattern(), len = pat().len[t];
+        char b[96];
+        if (what == 0) {        // a few strong steps, more on the beats
+            std::string row(kSteps, '0');
+            const float dens = 0.25f + 0.35f * rnd01();
+            for (int s = 0; s < len; ++s) row[s] = rnd01() < dens * (s % 4 == 0 ? 1.8f : (s % 2 ? 0.7f : 1.f)) ? '1' : '0';
+            if (len > 0 && row.find('1') == std::string::npos) row[0] = '1';
+            sendCmd("S " + std::to_string(p) + " " + std::to_string(t) + " " + row);
+        } else if (what == 1) { // notes in the scale (or a minor pentatonic when the scale is off), around the sample's pitch
+            static const int penta[7] = {0, 3, 5, 7, 10, 12, -5};
+            std::string c;
+            const Pattern& P = pat();
+            for (int s = 0; s < len; ++s) {
+                if (!P.on[t][s]) continue;
+                int n = kBaseNote;
+                if (bank->scale == 0) n += rnd01() < 0.35f ? 0 : penta[(int)(rnd01() * 7.f) % 7];
+                else {
+                    for (int tries = 0; tries < 32; ++tries) {
+                        const int c2 = kBaseNote + bank->root % 12 + (int)(rnd01() * 20.f) - 7;
+                        if (inScale(c2, kBaseNote + bank->root % 12, bank->scale)) { n = c2; break; }
+                    }
+                }
+                std::snprintf(b, sizeof(b), "N %d %d %d %d %d %d %d %d\n", p, t, s, clampi(n, 0, 127), (int)P.gate[t][s], (int)P.chord[t][s], (int)P.ratch[t][s], (int)P.cond[t][s]);
+                c += b;
+            }
+            if (!c.empty()) { c.pop_back(); sendLines(c); }
+        } else {                // the sound: where and how the grains read, their shape, the filter
+            const int ks[] = {tpPOSITION, tpSCAN, tpSPRAY, tpSIZE, tpDENSITY, tpSHAPE, tpSPREAD, tpJITTER, tpCUTOFF, tpRESO};
+            for (int k : ks) {
+                float v = std::round(rnd01() * 127.f);
+                if (k == tpCUTOFF) v = std::round(70.f + rnd01() * 57.f);
+                if (k == tpRESO || k == tpJITTER) v = std::round(rnd01() * 70.f);
+                if (k == tpSCAN) v = std::round(40.f + rnd01() * 50.f);
+                setParamGesture(tpIndex(t, k), v);
+            }
         }
-        const R pb = presetBtn();
-        box(pb, th->btnFill); frame(pb, th->text, -1.f, 1.5f);
-        label(pb.x + 12, pb.cy() + 1, "PRESETS", 9.f, th->dim, ALIGN_LEFT | ALIGN_MIDDLE);
-        number(pb.x + pb.w - 30, pb.cy() + 1, presetNameStr.c_str(), 15.f, th->text, ALIGN_RIGHT | ALIGN_MIDDLE);
-        beginPath(); moveTo(pb.x + pb.w - 18, pb.cy() - 6); lineTo(pb.x + pb.w - 10, pb.cy()); lineTo(pb.x + pb.w - 18, pb.cy() + 6); closePath(); fillColor(th->text); fill();
-        button(saveBtn(), "SAVE AS PRESET", false, 9.5f);
-        lcdCell(scaleBox(), "SCALE", kScaleNames[bank->scale % kScales]);
-        lcdCell(rootBox(), "ROOT", kRootNames[bank->root % 12]);
+        presetNameStr = "(random)";
+        repaint();
     }
     void drawReset()
     {
@@ -1919,6 +1968,7 @@ protected:
             if (g == gGL_CHANCE) return "CHAOS: chance per bar that a slice of the sent tracks is caught and repeated (SIZE, LENGTH, PITCH, FADE, REVERSE, MIX).";
             return std::string(masterName(g)) + ". Double-click = reset.";
         }
+        if (rndBtn().in(x, y)) return "RANDOM: new steps, new notes or a new sound for the selected track (UNDO restores).";
         if (recBtn().in(x, y)) return "REC: while playing, notes you play (keyboard, MIDI) are written on the selected track's steps, and knob moves become locks.";
         if (clickBtn().in(x, y)) return "Metronome while recording.";
         if (resetBtn().in(x, y)) return "RESET: every knob and effect back to its default; the samples, materials, slices and patterns stay (UNDO brings it back).";
@@ -2208,6 +2258,12 @@ protected:
         lastClickTime = ev.time; lastX = x; lastY = y;
         const bool right = ev.button == kMouseButtonRight;
 
+        if (rndOpen) {
+            const int h = kframe::hit(barInfo(), x, y);
+            rndOpen = false;
+            if (h >= kframe::hRandomItem) randomize(h - kframe::hRandomItem);
+            repaint(); return true;
+        }
         if (gripR().in(x, y) && overlay == ovNone) { drag = dkResize; resizeStartW = getWidth(); grabX = ev.pos.getX(); grabY = ev.pos.getY(); return true; }
         if (overlay == ovPresets) { presetsClick(x, y); return true; }
         if (overlay == ovLicense) return licenseClick(x, y);
@@ -2306,6 +2362,7 @@ protected:
         if (patCopy().in(x, y)) { patClip = editPattern(); showPatMsg("A" + std::to_string(patClip + 1) + " copied"); return true; }
         if (patPaste().in(x, y) && patClip >= 0) { char b[32]; std::snprintf(b, sizeof(b), "cp %d %d", patClip, editPattern()); sendCmd(b); showPatMsg("pasted"); return true; }
         if (patClear().in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "cl %d", editPattern()); sendCmd(b); lockStep = -1; repaint(); return true; }
+        if (rndBtn().in(x, y)) { rndOpen = true; repaint(); return true; }
         if (undoBtn().in(x, y)) { if (right) redo(); else undo(); return true; }
         if (presetBtn().in(x, y)) { scanUser(); overlay = ovPresets; repaint(); return true; }
         if (saveBtn().in(x, y)) { scanUser(); openSave(); return true; }
@@ -2522,6 +2579,7 @@ private:
     std::string smpMsg; double smpMsgUntil = 0; bool browseSample = false;
     std::string presetNameStr = "Init", presetMsg, saveName; bool saveConfirm = false;
     std::vector<std::string> userPresets;
+    bool rndOpen = false;
     std::deque<Snap> undoStack, redoStack; bool restoring = false; double lastSnapAt = -10.0; std::string lastSnapWhat;
     std::unique_ptr<upd::Checker> updater; int updLastState = -1;
     lic::Info licInfo; std::string licMsg;
