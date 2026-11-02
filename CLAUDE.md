@@ -190,3 +190,12 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
   `lock`, `cond`, `ratch`, `flt`, `sends`, `scaleNotes` (NOTES page), `arp`, `lfo` / `lfoFree`, `copy`, `chain`, `mix({dB})`
   per-track level from the mix checker); `PresetDef::trimDb` = master VOLUME first, then every track VOLUME by the same
   factor (limited at 127), about -16 LUFS.
+
+## 0.8.1 — SHIMMER reverb rebuilt (owner: "le son est pauvre et souvent le même", "craque quand on passe midi")
+
+- The old SHIMMER added an octave-up copy of the tail back into the tank input on top of the normal feedback: the loop gain
+  passed 1 around the middle of MOD (saturation, crackle) and the regenerating octave covered the source. Now (idea from the
+  MIT-licensed Clouds / Parasites reverb, no code copied) three of the eight lines are also read by two Hann-windowed taps
+  moving at twice the speed; the feedback is plain x keep + shifted x amount with keep^2 + 0.75 amount^2 = 1, so the energy
+  never grows; a 30 Hz high-pass and a soft ceiling sit in the loop; the shifted taps run a few cents apart per line.
+  Test (KDSP-16): `tests/shimmer.cpp` (stable at every MOD, MOD swept with a held tone stays bounded, tail dies, octave added).

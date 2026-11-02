@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- **SHIMMER reverb rebuilt.** The octave-up sound now lives inside the reverb's own feedback, crossfaded with the normal tail instead of added on top: no more build-up and crackle when MOD goes past the middle, the reverb keeps the colour of what you send it, and MOD really brings in the shimmering octave above (finer, wider, a little detuned between lines).
+
 ## 0.8.0
 
 - **New factory presets**: 12 pieces over 4 bars (64 steps) on the built-in materials, all in C minor. They use step
