@@ -8,6 +8,7 @@
 #include "MasterFx.hpp"
 #include "Skins.hpp"
 #include "Frame.hpp"
+#include "FxPresets.hpp"
 #include "LogoMark.hpp"
 #include "Fonts.hpp"
 #include "License.hpp"
@@ -422,7 +423,7 @@ protected:
     R lfoScope() const { return {20.f + 6 * 84.75f + 6.f, 340.f, 156.f, 94.f}; }
     // effects and patterns (right)
     enum FxPage { fxEcho, fxReverb, fxChorus, fxChaos, fxFilter, fxMaster, kFxPages };
-    R fxTab(int i) const { const float w = (444.f - (kFxPages - 1) * 4.f) / kFxPages; return {718.f + i * (w + 4.f), 122.f, w, 24.f}; }
+    R fxTab(int i) const { const float w = (444.f - 28.f - (kFxPages - 1) * 4.f) / kFxPages; return {718.f + i * (w + 4.f), 122.f, w, 24.f}; }   // the effect die after the tabs
     // ECHO: 12 slots, 6 per row; the others 8 slots, 4 per row (as KDSP-16)
     int fxSlots() const { return fxPage == fxEcho ? 12 : 8; }
     R fxKnob(int k) const
@@ -450,7 +451,7 @@ protected:
     R resetCancel() const { return {370.f, 420.f, 150.f, 40.f}; }
     // sequencer
     enum Lane { lnTrig, lnNote, lnLen, lnChord, lnRatch, lnCond, kLanes };
-    R laneBtn(int i) const { return {20.f + i * 70.f, 460.f, 66.f, 24.f}; }
+    R laneBtn(int i) const { return {20.f + i * 66.f, 460.f, 62.f, 24.f}; }
     static constexpr int kStepPages = kSteps / 16;
     R stepPageBtn(int i) const { return {442.f + i * 24.f, 460.f, 22.f, 24.f}; }
     R lenMinus() const { return {640.f, 460.f, 22.f, 24.f}; }
@@ -800,7 +801,7 @@ protected:
             label(62, 133, b, 11.f, th->lock, ALIGN_LEFT | ALIGN_MIDDLE);
             frame(lockClearBtn(), th->lock); label(lockClearBtn().cx(), lockClearBtn().cy() + 1, "CLEAR LOCKS", 9.f, th->lock);
         } else {
-            const std::string nm = fitText(srcName(t), 220.f, sz);
+            const std::string nm = fitText(srcName(t), 92.f, sz);
             label(62, 133, nm.c_str(), sz, th->text, ALIGN_LEFT | ALIGN_MIDDLE);
         }
         std::snprintf(b, sizeof(b), "MODE: %s", kModeNames[kit.mode % kGrainModes]);
@@ -1189,11 +1190,42 @@ protected:
         b.randomOpen = rndOpen;
         const std::string t = "track " + std::to_string(selTrack + 1);
         b.randomItems = {{"STEPS", t + ": which steps play"}, {"NOTES", t + ": notes of its steps"}, {"SOUND", t + ": source, grains, filter"}};
+        static const char* last[3] = {"steps", "notes", "sound"};
+        b.randomLast = last[rndLast % 3];
         return b;
+    }
+    // dice (one click, no menu): the track's sound (display), its steps or notes (NOTE lane), the effect shown
+    int rndLast = 2;   // what a click on RANDOM does again (SOUND until another is chosen in the menu)
+    static kframe::Rc diceSound() { return {160.f, 122.f, 24.f, 22.f}; }
+    static kframe::Rc diceSeq() { return {414.f, 460.f, 24.f, 24.f}; }
+    static kframe::Rc diceFx() { return {1138.f, 122.f, 24.f, 24.f}; }
+    int lastFxRandom = -1;
+    void randomizeFx()   // one of the shown effect's presets (FxPresets.hpp, as KDSP-16), every value nudged
+    {
+        static const int tabOf[kFxPages] = {kn::fxEcho, kn::fxReverb, kn::fxChorus, kn::fxChaos, kn::fxFilter, kn::fxMaster};
+        const auto& all = kn::fxPresets();
+        std::vector<int> v; for (int i = 0; i < (int)all.size(); ++i) if (all[i].tab == tabOf[fxPage]) v.push_back(i);
+        if (v.empty()) return;
+        int pick = v[(size_t)(rnd01() * v.size()) % v.size()];
+        if (pick == lastFxRandom && v.size() > 1) pick = v[((size_t)(std::find(v.begin(), v.end(), pick) - v.begin()) + 1) % v.size()];
+        lastFxRandom = pick;
+        snapshot("random effect");
+        const bool wasRestoring = restoring; restoring = true;
+        if (all[pick].tab == kn::fxEcho)
+            for (int g : {(int)gECHO_RTIME, (int)gECHO_DRIVE, (int)gECHO_DUCK, (int)gECHO_FREEZE}) setParamGesture(kGlobalBase + g, globalDefault(g));
+        for (const kn::FxSet& fs : all[pick].set) {
+            const bool keep = fs.g == gECHO_MODEL || fs.g == gREV_MODEL || fs.g == gCHO_MODEL || fs.g == gECHO_TIME;
+            const int j = keep ? 0 : (int)std::lround(rnd01() * 24.f) - 12;
+            setParamGesture(kGlobalBase + fs.g, (float)clampi(fs.v + j, 0, 127));
+        }
+        restoring = wasRestoring;
+        repaint();
     }
     void drawBottom()
     {
         using D = kframe::Draw<R, KgrnUI>;
+        if (!lockMode()) D::dice(*this, diceSound());
+        D::dice(*this, diceSeq()); D::dice(*this, diceFx());
         D::drawBar(*this, barInfo());
         D::barButton(*this, kframe::extraBtn(kframe::kExtrasX, 70.f), "RESET", "sound", false);
         D::barButton(*this, kframe::extraBtn(694.f, 84.f), "SCALE", kScaleNames[bank->scale % kScales], bank->scale != 0);
@@ -1968,7 +2000,11 @@ protected:
             if (g == gGL_CHANCE) return "CHAOS: chance per bar that a slice of the sent tracks is caught and repeated (SIZE, LENGTH, PITCH, FADE, REVERSE, MIX).";
             return std::string(masterName(g)) + ". Double-click = reset.";
         }
-        if (rndBtn().in(x, y)) return "RANDOM: new steps, new notes or a new sound for the selected track (UNDO restores).";
+        if (kframe::randomArrow().in(x, y)) return "The RANDOM menu: new steps, new notes or a new sound for the selected track; RANDOM then remembers the choice.";
+        if (rndBtn().in(x, y)) return "RANDOM: does again what is written below it (choose with the arrow). UNDO restores.";
+        if (diceSound().in(x, y) && !lockMode()) return "Random sound for this track: source, grains, filter. UNDO restores.";
+        if (diceSeq().in(x, y)) return "Random steps for this track (on the NOTE lane: random notes). UNDO restores.";
+        if (diceFx().in(x, y)) return "Random settings for the effect shown (one of its presets, a little changed). UNDO restores.";
         if (recBtn().in(x, y)) return "REC: while playing, notes you play (keyboard, MIDI) are written on the selected track's steps, and knob moves become locks.";
         if (clickBtn().in(x, y)) return "Metronome while recording.";
         if (resetBtn().in(x, y)) return "RESET: every knob and effect back to its default; the samples, materials, slices and patterns stay (UNDO brings it back).";
@@ -2261,7 +2297,7 @@ protected:
         if (rndOpen) {
             const int h = kframe::hit(barInfo(), x, y);
             rndOpen = false;
-            if (h >= kframe::hRandomItem) randomize(h - kframe::hRandomItem);
+            if (h >= kframe::hRandomItem) { rndLast = h - kframe::hRandomItem; randomize(rndLast); }
             repaint(); return true;
         }
         if (gripR().in(x, y) && overlay == ovNone) { drag = dkResize; resizeStartW = getWidth(); grabX = ev.pos.getX(); grabY = ev.pos.getY(); return true; }
@@ -2362,7 +2398,11 @@ protected:
         if (patCopy().in(x, y)) { patClip = editPattern(); showPatMsg("A" + std::to_string(patClip + 1) + " copied"); return true; }
         if (patPaste().in(x, y) && patClip >= 0) { char b[32]; std::snprintf(b, sizeof(b), "cp %d %d", patClip, editPattern()); sendCmd(b); showPatMsg("pasted"); return true; }
         if (patClear().in(x, y)) { char b[24]; std::snprintf(b, sizeof(b), "cl %d", editPattern()); sendCmd(b); lockStep = -1; repaint(); return true; }
-        if (rndBtn().in(x, y)) { rndOpen = true; repaint(); return true; }
+        if (kframe::randomArrow().in(x, y)) { rndOpen = true; repaint(); return true; }
+        if (rndBtn().in(x, y)) { randomize(rndLast); return true; }
+        if (diceSound().in(x, y) && !lockMode()) { randomize(2); return true; }
+        if (diceSeq().in(x, y)) { randomize(lane == lnNote ? 1 : 0); return true; }
+        if (diceFx().in(x, y)) { randomizeFx(); return true; }
         if (undoBtn().in(x, y)) { if (right) redo(); else undo(); return true; }
         if (presetBtn().in(x, y)) { scanUser(); overlay = ovPresets; repaint(); return true; }
         if (saveBtn().in(x, y)) { scanUser(); openSave(); return true; }

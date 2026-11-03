@@ -213,3 +213,4 @@ TRACK, MIX 50 on resets, MIX outside the pages, sample name in MATERIAL, page ta
   COPY PASTE CLEAR | -LOCKS | the plug-in's extras on the right.
 - Next steps agreed: the KDSP-16 preset browser everywhere, PATTERNS block, knob pages / LFO order / names, then KJNG-2.
 - KGRN-4: RESET / SCALE / ROOT = extras (618 / 694 / 784); new `randomize(0..2)` for the selected track (STEPS = `S` row weighted on the beats, NOTES = `N` per lit step in the scale or a minor pentatonic, SOUND = POSITION SCAN SPRAY SIZE DENSITY SHAPE SPREAD JITTER CUTOFF RESO).
+- 0.10.0 (dice + RANDOM that remembers, as KDSP-16 0.23.0): `rndLast` (default SOUND); dice `diceSound` {160, 122} (name fitted to 92 px; hidden in lock mode), `diceSeq` {414, 460} (lanes 62 wide, 66 apart; NOTE lane -> notes), `diceFx` {1138, 122} (fx tabs leave 28 px) -> `randomizeFx()` with `FxPresets.hpp` (copied from KDSP-16, identical, in `scripts/shared.sha256`).
